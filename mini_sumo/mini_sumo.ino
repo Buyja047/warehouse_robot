@@ -1,7 +1,14 @@
 /* =============================================================================
    MINI SUMO - STATE MACHINE + ХУРДНЫ УДИРДЛАГА
    Чиглэл: 1 (Урагш), 0 (Тоормос), -1 (Ухрах)
-   Хурд:   PWMA/PWMB пин дээр analogWrite (0..255)
+
+   ХУРДНЫ ХОЁР ГОРИМ (SPEED_MODE):
+     0 = PWMA/PWMB пин дээр analogWrite. Зөвхөн тэр утас драйверт ХОЛБООТОЙ үед.
+     1 = чиглэлийн пинийг өөрөө таслах (software PWM). AIN1/AIN2, BIN1/BIN2-ыг
+         "явах <-> тоормос" хооронд 250 Гц-ээр сэлгэнэ. TB6612-т IN1=H,IN2=H нь
+         тоормос тул үр дүн нь PWM-тэй яг ижил.
+         >>> ЭНЭ ГОРИМ PWM УТАС ХОЛБООТОЙ Ч, ХОЛБООГҮЙ Ч АЖИЛЛАНА. <<<
+         Тиймээс үндсэн утга нь 1.
 
    ЧУХАЛ (Timer1): Nano дээр Servo сан Timer1-ийг эзэлж D9/D10-ийн analogWrite-ийг
    унтраадаг. PWMB = D9 тул Servo.h ашиглаж БОЛОХГҮЙ — серво импульсийг гараар
@@ -30,11 +37,17 @@
 #define START_BUTTON 12
 
 // =============================================================================
-// ХУРДНЫ ТОХИРГОО (0..255).  255 = өмнөх бүтэн хурд.
-// Бүгдийг нэг дор өөрчлөх бол SPEED_SCALE-ийг л мушги.
+// ХУРДНЫ ГОРИМ
 // =============================================================================
-#define SPEED_SCALE     1.00  // 1.00 = доорх утгууд яг хэвээр, 0.80 = 20% удаан
-                              // ЭНЭ БОЛ ГОЛ ТОХИРУУЛГА. Илүү удаан бол 0.70 гэх мэт.
+#define SPEED_MODE          1   // 1 = чиглэлийн пин таслах (ЗӨВЛӨЖ БАЙНА)
+                                // 0 = PWMA/PWMB дээр analogWrite
+#define SOFT_PWM_PERIOD_US 4000 // software PWM-ийн үе (4000us = 250 Гц)
+
+// =============================================================================
+// ХУРДНЫ ТОХИРГОО (0..255).  255 = бүтэн хурд.
+// =============================================================================
+#define SPEED_SCALE     1.00  // ГОЛ ТОХИРУУЛГА: бүх хурдыг нэг дор мушгина
+                              // 0.70 = 30% удаан, 1.20 = 20% хурдан
 
 #define SPD_CHARGE       110  // эхний сохор дайралт      (~43%)
 #define SPD_ATTACK       120  // mid: яг урдаас түлхэх     (~47%)
@@ -44,37 +57,34 @@
 #define SPD_BACK         105  // хүрээнээс ухрах           (~41%)
 #define SPD_ESC_TURN     110  // хүрээнээс зайлж эргэх     (~43%)
 
-#define PWM_MIN           55  // үүнээс доош PWM-д мотор огт эргэхгүй (үхмэл бүс)
+#define PWM_MIN           55  // үүнээс доош мотор огт эргэхгүй (үхмэл бүс)
                               // Мотор чичрээд эргэхгүй бол ЭНИЙГ өсгө (65, 75...)
 
-// --- PWM ШАЛГАХ ГОРИМ --------------------------------------------------------
+// --- ХУРД ШАЛГАХ ГОРИМ -------------------------------------------------------
 // 1 болговол товч дархад тулаан эхлэхгүй, оронд нь хоёр мотор 5 шатаар
 // (60 -> 100 -> 150 -> 200 -> 255) тус бүр 2.5 сек эргэнэ.
-// РОБОТЫГ ӨРГӨЖ БАРЬ эсвэл тавцан дээр тавь — дугуй чөлөөтэй эргэх ёстой.
-//   Шат бүрт хурд өөр байвал  -> PWM зөв ажиллаж байна, SPEED_SCALE-ээр тааруул.
-//   Бүгд ижил хурдтай байвал  -> PWMA/PWMB утас драйверт очихгүй байна эсвэл
-//                                драйвер дээрх PWM пин VCC рүү холбоостой (техник асуудал).
+// РОБОТЫГ ӨРГӨЖ БАРЬ — дугуй чөлөөтэй эргэх ёстой.
+//   Шат ахих тусам хурдсвал -> хурдны удирдлага ажиллаж байна.
+//   Бүгд ижил хурдтай бол    -> SPEED_MODE-ыг эсрэгээр нь солиод дахин үз.
 #define TEST_SPEED_MODE    0
 
 // --- Мотор утасны чиглэл -----------------------------------------------------
 // Энэ роботын мотор урвуу холбоостой: AIN1=LOW/AIN2=HIGH үед УРАГШ явдаг.
-// Тиймээс хоёулаа 1. Ингэснээр кодын бүх газарт 1 = урагш гэсэн НЭГ конвенц
-// үйлчилж, setMotors() дотроо тэмдгийг эргүүлж өгнө.
-// Хэрэв нэг дугуй нь эсрэг эргэвэл ЗӨВХӨН тэр талынхыг нь 0 болго.
+// Тиймээс хоёулаа 1. Кодын бүх газарт 1 = урагш гэсэн НЭГ конвенц үйлчилнэ.
+// Нэг дугуй нь эсрэг эргэвэл ЗӨВХӨН тэр талынхыг нь 0 болго.
 #define LEFT_INVERT        1
 #define RIGHT_INVERT       1
 
 // =============================================================================
 // ХУГАЦААНЫ ТОХИРГОО
 // АНХААР: хурдыг өөрчилвөл эргэлтийн хугацааг ЗААВАЛ дахин тааруул.
-//         Хурд буурвал ижил өнцгийг эргэхэд ИЛҮҮ УДААН хугацаа хэрэгтэй.
 // =============================================================================
 #define START_DELAY_MS  5000
 #define FIRST_CHARGE_MS 1500  // эхний чигээрээ дайрах хугацаа
 #define BRAKE_MS          60
-#define BACK_MS          190  // хурд дахин буурсан тул 130 -> 190
-#define TURN_90_MS       520  // хурд дахин буурсан тул 360 -> 520
-#define TURN_180_MS      900  // хурд дахин буурсан тул 620 -> 900
+#define BACK_MS          190
+#define TURN_90_MS       520
+#define TURN_180_MS      900
 #define ESC_SETTLE_MS     40
 
 // =============================================================================
@@ -106,13 +116,63 @@ uint32_t lastSampleUs = 0;
 bool eL90, eL45, eMid, eR45, eR90, eAny;
 int8_t lastSeen = 1;
 
+// Моторын хүссэн төлөв:  1 = урагш, -1 = ухрах, 0 = тоормос, 2 = чөлөөт
+int8_t  cmdA = 2, cmdB = 2;
+uint8_t dutyA = 0, dutyB = 0;
+
 // ==========================================
-// МОТОР УДИРДЛАГА — чиглэл (1/0/-1) + хурд (PWM)
+// МОТОРЫН ПИН БИЧИХ (илүүц бичилтийг алгасана)
+// ==========================================
+static int8_t lastA = 99, lastB = 99;
+
+static void applyA(int8_t st) {
+  if (st == lastA) return;
+  lastA = st;
+  if      (st ==  1) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);  }
+  else if (st == -1) { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, HIGH); }
+  else if (st ==  0) { digitalWrite(AIN1, HIGH); digitalWrite(AIN2, HIGH); } // тоормос
+  else               { digitalWrite(AIN1, LOW);  digitalWrite(AIN2, LOW);  } // чөлөөт
+}
+
+static void applyB(int8_t st) {
+  if (st == lastB) return;
+  lastB = st;
+  if      (st ==  1) { digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);  }
+  else if (st == -1) { digitalWrite(BIN1, LOW);  digitalWrite(BIN2, HIGH); }
+  else if (st ==  0) { digitalWrite(BIN1, HIGH); digitalWrite(BIN2, HIGH); }
+  else               { digitalWrite(BIN1, LOW);  digitalWrite(BIN2, LOW);  }
+}
+
+// ==========================================
+// SOFTWARE PWM — байнга дуудагдах ёстой
+// ==========================================
+void motorTick() {
+#if SPEED_MODE == 1
+  uint16_t phase = (uint16_t)(micros() % SOFT_PWM_PERIOD_US);
+
+  if (cmdA == 1 || cmdA == -1) {
+    uint16_t onA = (uint16_t)((uint32_t)SOFT_PWM_PERIOD_US * dutyA / 255);
+    applyA((phase < onA) ? cmdA : 0);          // ассан үе = явна, унтарсан үе = тоормос
+  } else {
+    applyA(cmdA);
+  }
+
+  if (cmdB == 1 || cmdB == -1) {
+    uint16_t onB = (uint16_t)((uint32_t)SOFT_PWM_PERIOD_US * dutyB / 255);
+    applyB((phase < onB) ? cmdB : 0);
+  } else {
+    applyB(cmdB);
+  }
+#endif
+}
+
+// ==========================================
+// МОТОР УДИРДЛАГА
 // ==========================================
 static uint8_t scaleSpeed(int pwm) {
   long v = (long)(pwm * SPEED_SCALE);
   if (v > 255) v = 255;
-  if (v > 0 && v < PWM_MIN) v = PWM_MIN;      // үхмэл бүсийг давуулна
+  if (v > 0 && v < PWM_MIN) v = PWM_MIN;       // үхмэл бүсийг давуулна
   if (v < 0) v = 0;
   return (uint8_t)v;
 }
@@ -128,43 +188,48 @@ void setMotors(int l, int r, int pwm) {
   r = -r;
 #endif
 
-  // Зүүн мотор (A)
-  if (l == 0) {                                       // богино тоормос
-    digitalWrite(AIN1, HIGH); digitalWrite(AIN2, HIGH); analogWrite(PWMA, 255);
-  } else {
-    digitalWrite(AIN1, (l > 0) ? HIGH : LOW);
-    digitalWrite(AIN2, (l > 0) ? LOW  : HIGH);
-    analogWrite(PWMA, p);
-  }
+  int8_t a = (l == 0) ? 0 : (l > 0 ? 1 : -1);
+  int8_t b = (r == 0) ? 0 : (r > 0 ? 1 : -1);
 
-  // Баруун мотор (B)
-  if (r == 0) {
-    digitalWrite(BIN1, HIGH); digitalWrite(BIN2, HIGH); analogWrite(PWMB, 255);
-  } else {
-    digitalWrite(BIN1, (r > 0) ? HIGH : LOW);
-    digitalWrite(BIN2, (r > 0) ? LOW  : HIGH);
-    analogWrite(PWMB, p);
-  }
+#if SPEED_MODE == 0
+  applyA(a);  analogWrite(PWMA, (a == 0) ? 255 : p);
+  applyB(b);  analogWrite(PWMB, (b == 0) ? 255 : p);
+#else
+  cmdA = a; dutyA = p;
+  cmdB = b; dutyB = p;
+  motorTick();
+#endif
 }
 
 void brakeMotors() { setMotors(0, 0, 0); }
 
-void coastMotors() {                                   // чөлөөтэй зогсолт
-  digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0);
-  digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0);
+void coastMotors() {
+#if SPEED_MODE == 0
+  applyA(2); analogWrite(PWMA, 0);
+  applyB(2); analogWrite(PWMB, 0);
+#else
+  cmdA = 2; cmdB = 2;
+  motorTick();
+#endif
+}
+
+// Мотор эргэсээр байх ёстой үеийн хүлээлт
+void tickDelay(uint16_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) motorTick();
 }
 
 // ==========================================
-// PWM ШАЛГАХ ГОРИМ
+// ХУРД ШАЛГАХ ГОРИМ
 // ==========================================
 #if TEST_SPEED_MODE
 void speedTest() {
   const int steps[] = { 60, 100, 150, 200, 255 };
   for (uint8_t i = 0; i < 5; i++) {
     setMotors(1, 1, steps[i]);                 // хоёулаа урагш
-    delay(2500);
+    tickDelay(2500);
     coastMotors();
-    delay(800);                                // шат хооронд завсар
+    tickDelay(800);                            // шат хооронд завсар
   }
 }
 #endif
@@ -247,7 +312,7 @@ bool buttonPressed() {
   if (!buttonDown()) return false;
   delay(25);
   if (!buttonDown()) return false;
-  while (buttonDown()) { }
+  while (buttonDown()) { motorTick(); }
   delay(25);
   return true;
 }
@@ -256,6 +321,7 @@ void driveFor(int left, int right, int pwm, uint16_t ms) {
   uint32_t t0 = millis();
   setMotors(left, right, pwm);
   while (millis() - t0 < ms) {
+    motorTick();
     lineTask();
     if (buttonDown()) { coastMotors(); running = false; return; }
   }
@@ -265,7 +331,7 @@ void driveFor(int left, int right, int pwm, uint16_t ms) {
 // ХҮРЭЭНЭЭС ЗУГТАХ
 // ==========================================
 void escapeEdge(bool hitLeft, bool hitRight) {
-  brakeMotors(); delay(BRAKE_MS);              // тас зуурах
+  brakeMotors(); tickDelay(BRAKE_MS);          // тас зуурах
 
   driveFor(-1, -1, SPD_BACK, BACK_MS);         // хоёулаа ухрах
   if (!running) return;
@@ -282,7 +348,7 @@ void escapeEdge(bool hitLeft, bool hitRight) {
   }
   if (!running) return;
 
-  brakeMotors(); delay(ESC_SETTLE_MS);
+  brakeMotors(); tickDelay(ESC_SETTLE_MS);
   lineReset();
 
   firstMove = false;                           // сохор дайралтыг цуцлана
@@ -295,6 +361,12 @@ void setup() {
   pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(PWMA, OUTPUT);
   pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT); pinMode(PWMB, OUTPUT);
   pinMode(STBY, OUTPUT); digitalWrite(STBY, HIGH);
+
+#if SPEED_MODE == 1
+  digitalWrite(PWMA, HIGH);                    // PWM пин байнга нээлттэй,
+  digitalWrite(PWMB, HIGH);                    // хурдыг чиглэлийн пинээр таслана
+#endif
+
   coastMotors();
 
   pinMode(left90, INPUT); pinMode(left45, INPUT); pinMode(mid, INPUT);
@@ -309,11 +381,13 @@ void setup() {
 // LOOP - STATE MACHINE
 // ==========================================
 void loop() {
+  motorTick();                                 // software PWM-ийг тэжээнэ
+
   if (!running) {
     coastMotors();
     if (buttonPressed()) {
 #if TEST_SPEED_MODE
-      speedTest();                             // тулаан эхлэхгүй, зөвхөн PWM шалгана
+      speedTest();                             // тулаан эхлэхгүй, зөвхөн хурд шалгана
       return;
 #endif
       calibrateLine();                         // робот ХАР талбай дээр байна
