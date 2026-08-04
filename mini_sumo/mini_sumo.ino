@@ -1,24 +1,15 @@
 /* =============================================================================
-   MINI SUMO ROBOT  —  Arduino Nano + TB6612FNG + 5x digital IR + 2x QTR analog
+   MINI SUMO - STATE MACHINE + ХУРДНЫ УДИРДЛАГА
+   Чиглэл: 1 (Урагш), 0 (Тоормос), -1 (Ухрах)
+   Хурд:   PWMA/PWMB пин дээр analogWrite (0..255)
 
-   Ажиллах зарчим:
-     D12 товч дарна -> QTR калибровк (хар талбай дээр) -> серво 90 -> 5 сек
-     тоолол -> тулаан. Тулааны үед: цагаан хүрээ мэдэрвэл ЭХНИЙ ЭЭЛЖИНД зугтана,
-     үгүй бол өрсөлдөгчөө хайж түлхнэ. Тулааны үед D12-г дахин дарвал зогсоно.
+   ЧУХАЛ (Timer1): Nano дээр Servo сан Timer1-ийг эзэлж D9/D10-ийн analogWrite-ийг
+   унтраадаг. PWMB = D9 тул Servo.h ашиглаж БОЛОХГҮЙ — серво импульсийг гараар
+   үүсгэсэн (setup-д зөвхөн нэг удаа), Timer1 чөлөөтэй үлдэнэ.
 
-   ЧУХАЛ (Timer1):
-     Nano-гийн Servo сан Timer1-ийг эзэлдэг ба D9/D10-ийн analogWrite-ийг
-     унтраадаг. PWMB = D9 тул Servo.h ашиглаж БОЛОХГҮЙ. Тиймээс сервоны импульсийг
-     энд гараар (bit-bang) үүсгэж байгаа — Timer1 чөлөөтэй, PWMB бүрэн ажиллана.
-
-   ЧУХАЛ (A6/A7):
-     A6, A7 нь зөвхөн ANALOG орц. lLine = A7 тул analogRead-аар л уншина
-     (digitalRead / pinMode ажиллахгүй). Тиймээс лайн мэдрэгчид analogRead-тэй.
+   ЧУХАЛ (A6/A7): lLine = A7 нь зөвхөн аналог орц. analogRead-аар л уншина.
    ============================================================================= */
 
-// ==========================================
-// ПИН
-// ==========================================
 #define PWMA 3
 #define AIN2 4
 #define AIN1 5
@@ -38,139 +29,119 @@
 #define SERVO_PIN 10
 #define START_BUTTON 12
 
-// ==========================================
-// ТОХИРГОО — энд тохируулна
-// ==========================================
+// =============================================================================
+// ХУРДНЫ ТОХИРГОО (0..255).  255 = өмнөх бүтэн хурд.
+// Бүгдийг нэг дор өөрчлөх бол SPEED_SCALE-ийг л мушги.
+// =============================================================================
+#define SPEED_SCALE     1.00  // 1.00 = доорх утгууд яг хэвээр, 0.80 = 20% удаан
+
+#define SPD_CHARGE       170  // эхний сохор дайралт
+#define SPD_ATTACK       175  // mid: яг урдаас түлхэх
+#define SPD_CURVE        150  // 45°: хурц нум
+#define SPD_SPIN         140  // 90°: байрандаа эргэх
+#define SPD_SEARCH       135  // өрсөлдөгчийг алдсан үеийн эргэлт
+#define SPD_BACK         150  // хүрээнээс ухрах
+#define SPD_ESC_TURN     155  // хүрээнээс зайлж эргэх
+
+#define PWM_MIN           55  // үүнээс доош PWM-д мотор огт эргэхгүй (үхмэл бүс)
 
 // --- Мотор утасны чиглэл -----------------------------------------------------
-#define MOTOR_A_IS_LEFT   1   // A суваг зүүн мотор бол 1, баруун бол 0
-#define LEFT_INVERT       0   // зүүн дугуй буруу эргэвэл 1 болго
-#define RIGHT_INVERT      0   // баруун дугуй буруу эргэвэл 1 болго
+// Энэ роботын мотор урвуу холбоостой: AIN1=LOW/AIN2=HIGH үед УРАГШ явдаг.
+// Тиймээс хоёулаа 1. Ингэснээр кодын бүх газарт 1 = урагш гэсэн НЭГ конвенц
+// үйлчилж, setMotors() дотроо тэмдгийг эргүүлж өгнө.
+// Хэрэв нэг дугуй нь эсрэг эргэвэл ЗӨВХӨН тэр талынхыг нь 0 болго.
+#define LEFT_INVERT        1
+#define RIGHT_INVERT       1
 
-// --- Хурд (0..255) -----------------------------------------------------------
-#define SPD_ATTACK      255   // шууд түлхэх
-#define SPD_PUSH        235   // 45° мэдэрсэн үеийн түлхэлт
-#define SPD_TURN        215   // өрсөлдөгч рүү эргэх
-#define SPD_SEARCH      150   // хайлтын урагш
-#define SPD_SEARCH_SPIN 175   // хайлтын эргэлт
-#define SPD_ESC_BACK    225   // хүрээнээс ухрах
-#define SPD_ESC_TURN    230   // хүрээнээс эргэх
-#define PWM_MIN          45   // үүнээс бага PWM-д мотор эргэхгүй (үхмэл бүс)
+// =============================================================================
+// ХУГАЦААНЫ ТОХИРГОО
+// АНХААР: хурдыг өөрчилвөл эргэлтийн хугацааг ЗААВАЛ дахин тааруул.
+//         Хурд буурвал ижил өнцгийг эргэхэд ИЛҮҮ УДААН хугацаа хэрэгтэй.
+// =============================================================================
+#define START_DELAY_MS  5000
+#define FIRST_CHARGE_MS 1500  // эхний чигээрээ дайрах хугацаа
+#define BRAKE_MS          60
+#define BACK_MS          130  // хурд буурсан тул 80 -> 130
+#define TURN_90_MS       360  // хурд буурсан тул 240 -> 360
+#define TURN_180_MS      620  // хурд буурсан тул 420 -> 620
+#define ESC_SETTLE_MS     40
 
-// --- Хугацаа (ms) ------------------------------------------------------------
-#define START_DELAY_MS  5000  // дүрмийн 5 сек. Хэрэггүй бол 0 болго
-#define BRAKE_MS          40  // хүрээ мэдрэхэд эхлээд тоормослох
-#define BACK_MS          230  // ухрах хугацаа (ХЭТ УРТ БОЛГОХГҮЙ! ард нь ирмэг байна)
-#define TURN_90_MS       270  // нэг талын хүрээнээс эргэх
-#define TURN_180_MS      460  // хоёр талаараа хүрээ дээр гарсан үед эргэх
-#define ESC_SETTLE_MS     60  // зугтсаны дараа мэдрэгчийг тайвшруулах
-#define SEARCH_SPIN_MS   550  // хайлт: эргэх үе шат
-#define SEARCH_FWD_MS    450  // хайлт: урагш очих үе шат
-
-// --- Мэдрэгчийн туйлшрал -----------------------------------------------------
-#define ENEMY_ACTIVE    HIGH  // 5 IR мэдрэгч мэдэрсэн үед 1 (HIGH) өгнө
-#define QTR_WHITE_IS_LOW   1  // QTR: цагаан дээр утга БАГА бол 1, ИХ бол 0
-
-// --- Цагаан хүрээ таних (хар талбай дээрх цагаан толбыг үл тоох) --------------
-#define AUTO_CALIBRATE     1  // эхлэхэд хар талбайг хэмжиж босго өөрөө тавина
-#define WHITE_FACTOR    0.55  // босго = хар_дундаж * энэ. Бага = мэдрэмж бага
-#define MIN_BLACK_MARGIN 120  // босго нь хараас дор хаяж ийм зайд байх ёстой
-#define LINE_THR_L_DEF   450  // авто калибровк унтарсан/бүтэлгүйтсэн үеийн босго
-#define LINE_THR_R_DEF   450
-#define LINE_CONFIRM       4  // ийм олон УДААГИЙН ДАРААЛСАН уншилтад цагаан бол
-                              // л жинхэнэ хүрээ гэж үзнэ (толбыг шүүнэ)
-#define LINE_SAMPLE_US   700  // хоёр QTR-ийг ийм үетэйгээр уншина
-// => батлах хугацаа ≈ LINE_CONFIRM * LINE_SAMPLE_US = ~2.8 ms.
-//    Толбо байсаар байвал LINE_CONFIRM-ыг 5..7 болго. Хүрээгээ алдвал 2..3 болго.
+// =============================================================================
+// МЭДРЭГЧИЙН ТОХИРГОО
+// =============================================================================
+#define ENEMY_ACTIVE    HIGH
+#define AUTO_CALIBRATE     1
+#define WHITE_FACTOR    0.30
+#define MIN_BLACK_MARGIN 120
+#define LINE_CONFIRM       7
+#define LINE_SAMPLE_US   700
 
 // --- Серво -------------------------------------------------------------------
-#define SERVO_START_ANGLE  90 // эхлэхэд явах өнцөг
-#define SERVO_US_MIN      600 // 0°  импульс (сервогоо дагаж тохируул)
-#define SERVO_US_MAX     2400 // 180° импульс
-#define SERVO_SET_PULSES   35 // байрлалд хүргэх импульсийн тоо (~0.7 сек)
-#define SERVO_REFRESH_MS    0 // 0 = тулааны үед импульс явуулахгүй (санал болгоно).
-                              // Серво ачаа барих ёстой бол 20 болго — гэхдээ
-                              // хайлтын үед бүр 1.5 ms саатал үүсгэнэ.
+#define SERVO_START_ANGLE 90
+#define SERVO_US_MIN     600
+#define SERVO_US_MAX    2400
+#define SERVO_SET_PULSES  35
 
-// --- Бусад -------------------------------------------------------------------
-#define BUTTON_ACTIVE     LOW // INPUT_PULLUP тул дарахад LOW
-#define ENABLE_STALL_BREAK  1 // удаан түлхээд хөдөлгөөнгүй бол өнцгөөр дахин дайрах
-#define STALL_MS         2600 // ийм удаан "mid" дээр түлхвэл заль хийнэ
-#define DEBUG_SERIAL        1 // 1 = Serial мэдээлэл (тулааны үед бараг хэвлэхгүй)
+// --- Дотоод төлвүүд ----------------------------------------------------------
+bool running = false;
+bool firstMove = false;
+uint32_t firstMoveStart = 0;
 
-// ==========================================
-// ДОТООД ТӨЛӨВ
-// ==========================================
-bool running = false;                 // тулаан явж байна уу
-
-uint16_t thrL = LINE_THR_L_DEF;       // цагаан хүрээний босго (зүүн QTR)
-uint16_t thrR = LINE_THR_R_DEF;       // цагаан хүрээний босго (баруун QTR)
-
-uint8_t  hitL = 0, hitR = 0;          // дараалсан цагаан уншилтын тоолуур
+uint16_t thrL = 450, thrR = 450;
+uint8_t  hitL = 0, hitR = 0;
 bool     lineL = false, lineR = false;
 uint32_t lastSampleUs = 0;
 
 bool eL90, eL45, eMid, eR45, eR90, eAny;
-
-int8_t   lastSeen   = 1;              // -1 = зүүн, +1 = баруун (сүүлд харсан тал)
-int8_t   searchDir  = 1;
-uint32_t searchStart = 0;
-uint32_t pushStart   = 0;
-uint32_t servoLastUs = 0;
+int8_t lastSeen = 1;
 
 // ==========================================
-// МОТОР (TB6612FNG)
+// МОТОР УДИРДЛАГА — чиглэл (1/0/-1) + хурд (PWM)
 // ==========================================
-static int clampPwm(int p) {
-  if (p > 255) p = 255;
-  if (p > 0 && p < PWM_MIN) p = PWM_MIN;   // үхмэл бүсийг давуулна
-  return p;
+static uint8_t scaleSpeed(int pwm) {
+  long v = (long)(pwm * SPEED_SCALE);
+  if (v > 255) v = 255;
+  if (v > 0 && v < PWM_MIN) v = PWM_MIN;      // үхмэл бүсийг давуулна
+  if (v < 0) v = 0;
+  return (uint8_t)v;
 }
 
-void motorA(int s) {                        // s: -255..255
-  bool fwd = (s >= 0);
-  int p = clampPwm(abs(s));
-  if (p == 0) { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0); return; }
-  digitalWrite(AIN1, fwd ? HIGH : LOW);
-  digitalWrite(AIN2, fwd ? LOW  : HIGH);
-  analogWrite(PWMA, p);
-}
+// l, r: 1 = урагш, -1 = ухрах, 0 = тоормос.  pwm: 0..255
+void setMotors(int l, int r, int pwm) {
+  uint8_t p = scaleSpeed(pwm);
 
-void motorB(int s) {
-  bool fwd = (s >= 0);
-  int p = clampPwm(abs(s));
-  if (p == 0) { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0); return; }
-  digitalWrite(BIN1, fwd ? HIGH : LOW);
-  digitalWrite(BIN2, fwd ? LOW  : HIGH);
-  analogWrite(PWMB, p);
-}
-
-// left/right: -255..255 (эерэг = урагш)
-void drive(int left, int right) {
 #if LEFT_INVERT
-  left = -left;
+  l = -l;
 #endif
 #if RIGHT_INVERT
-  right = -right;
+  r = -r;
 #endif
-#if MOTOR_A_IS_LEFT
-  motorA(left);  motorB(right);
-#else
-  motorA(right); motorB(left);
-#endif
+
+  // Зүүн мотор (A)
+  if (l == 0) {                                       // богино тоормос
+    digitalWrite(AIN1, HIGH); digitalWrite(AIN2, HIGH); analogWrite(PWMA, 255);
+  } else {
+    digitalWrite(AIN1, (l > 0) ? HIGH : LOW);
+    digitalWrite(AIN2, (l > 0) ? LOW  : HIGH);
+    analogWrite(PWMA, p);
+  }
+
+  // Баруун мотор (B)
+  if (r == 0) {
+    digitalWrite(BIN1, HIGH); digitalWrite(BIN2, HIGH); analogWrite(PWMB, 255);
+  } else {
+    digitalWrite(BIN1, (r > 0) ? HIGH : LOW);
+    digitalWrite(BIN2, (r > 0) ? LOW  : HIGH);
+    analogWrite(PWMB, p);
+  }
 }
 
-// dir: +1 = баруун тийш эргэх, -1 = зүүн тийш эргэх (байрандаа)
-void spin(int8_t dir, int speed) {
-  drive(dir > 0 ? speed : -speed, dir > 0 ? -speed : speed);
-}
+void brakeMotors() { setMotors(0, 0, 0); }
 
-void brakeMotors() {                         // TB6612 богино тоормос
-  digitalWrite(AIN1, HIGH); digitalWrite(AIN2, HIGH); analogWrite(PWMA, 255);
-  digitalWrite(BIN1, HIGH); digitalWrite(BIN2, HIGH); analogWrite(PWMB, 255);
+void coastMotors() {                                   // чөлөөтэй зогсолт
+  digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0);
+  digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0);
 }
-
-void coast() { drive(0, 0); }
 
 // ==========================================
 // СЕРВО (Timer1 хэрэглэхгүй, гараар импульс)
@@ -182,33 +153,15 @@ void servoPulse(int angle) {
   digitalWrite(SERVO_PIN, LOW);
 }
 
-void servoGoTo(int angle) {                  // байрлалд хүргэнэ (setup-д ашиглана)
+void servoGoTo(int angle) {
   for (uint8_t i = 0; i < SERVO_SET_PULSES; i++) { servoPulse(angle); delay(20); }
 }
 
-void servoRefresh() {                        // сонголтоор: барих импульс
-#if SERVO_REFRESH_MS > 0
-  if (millis() - servoLastUs >= SERVO_REFRESH_MS) {
-    servoLastUs = millis();
-    servoPulse(SERVO_START_ANGLE);
-  }
-#endif
-}
-
 // ==========================================
-// ЛАЙН МЭДРЭГЧ (цагаан хүрээ)
+// ЛАЙН МЭДРЭГЧ
 // ==========================================
-static inline bool isWhite(uint16_t v, uint16_t thr) {
-#if QTR_WHITE_IS_LOW
-  return v < thr;
-#else
-  return v > thr;
-#endif
-}
+static inline bool isWhite(uint16_t v, uint16_t thr) { return v < thr; }
 
-// Дараалсан LINE_CONFIRM уншилтад цагаан гарсан үед л ХҮРЭЭ гэж баталгаажна.
-// Ингэснээр хар талбай дээрх сарнисан цагаан толбо (богино хугацааны цохилт)
-// шүүгдэж, зөвхөн 2 см өргөн тасралтгүй хүрээ таарна.
 void lineTask() {
   if ((uint32_t)(micros() - lastSampleUs) < LINE_SAMPLE_US) return;
   lastSampleUs = micros();
@@ -225,7 +178,6 @@ void lineTask() {
 
 void lineReset() { hitL = hitR = 0; lineL = lineR = false; lastSampleUs = micros(); }
 
-// Робот ХАР талбай дээр байх ёстой үед дуудна.
 void calibrateLine() {
 #if AUTO_CALIBRATE
   uint32_t sumL = 0, sumR = 0;
@@ -238,249 +190,158 @@ void calibrateLine() {
   uint16_t blackL = sumL / N;
   uint16_t blackR = sumR / N;
 
-  #if QTR_WHITE_IS_LOW
-    long tL = (long)(blackL * WHITE_FACTOR);
-    long tR = (long)(blackR * WHITE_FACTOR);
-    if (blackL - tL < MIN_BLACK_MARGIN) tL = (long)blackL - MIN_BLACK_MARGIN;
-    if (blackR - tR < MIN_BLACK_MARGIN) tR = (long)blackR - MIN_BLACK_MARGIN;
-    // Хар талбай хэт тод байвал (буруу газар калибровк хийсэн) анхны утгыг барина
-    thrL = (tL > 40) ? (uint16_t)tL : LINE_THR_L_DEF;
-    thrR = (tR > 40) ? (uint16_t)tR : LINE_THR_R_DEF;
-  #else
-    long tL = (long)blackL + (long)((1023 - blackL) * (1.0 - WHITE_FACTOR));
-    long tR = (long)blackR + (long)((1023 - blackR) * (1.0 - WHITE_FACTOR));
-    if (tL - blackL < MIN_BLACK_MARGIN) tL = (long)blackL + MIN_BLACK_MARGIN;
-    if (tR - blackR < MIN_BLACK_MARGIN) tR = (long)blackR + MIN_BLACK_MARGIN;
-    thrL = (tL < 1000) ? (uint16_t)tL : LINE_THR_L_DEF;
-    thrR = (tR < 1000) ? (uint16_t)tR : LINE_THR_R_DEF;
-  #endif
-
-  #if DEBUG_SERIAL
-    Serial.print(F("CAL black L/R = ")); Serial.print(blackL); Serial.print('/'); Serial.print(blackR);
-    Serial.print(F("   thr L/R = "));    Serial.print(thrL);   Serial.print('/'); Serial.println(thrR);
-  #endif
+  long tL = (long)(blackL * WHITE_FACTOR);
+  long tR = (long)(blackR * WHITE_FACTOR);
+  if (blackL - tL < MIN_BLACK_MARGIN) tL = (long)blackL - MIN_BLACK_MARGIN;
+  if (blackR - tR < MIN_BLACK_MARGIN) tR = (long)blackR - MIN_BLACK_MARGIN;
+  thrL = (tL > 40) ? (uint16_t)tL : 450;
+  thrR = (tR > 40) ? (uint16_t)tR : 450;
 #endif
   lineReset();
 }
 
 // ==========================================
-// ӨРСӨЛДӨГЧИЙН МЭДРЭГЧ
+// МЭДРЭГЧ УНШИХ
 // ==========================================
 static inline bool ir(uint8_t pin) { return digitalRead(pin) == ENEMY_ACTIVE; }
 
 void readEnemy() {
-  eL90 = ir(left90);
-  eL45 = ir(left45);
-  eMid = ir(mid);
-  eR45 = ir(right45);
-  eR90 = ir(right90);
+  eL90 = ir(left90); eL45 = ir(left45); eMid = ir(mid); eR45 = ir(right45); eR90 = ir(right90);
   eAny = eL90 || eL45 || eMid || eR45 || eR90;
-
   if      (eL45 || eL90) lastSeen = -1;
   else if (eR45 || eR90) lastSeen = +1;
 }
 
 // ==========================================
-// ТОВЧ
+// ТУСЛАХ ФУНКЦҮҮД
 // ==========================================
-bool buttonDown() { return digitalRead(START_BUTTON) == BUTTON_ACTIVE; }
+bool buttonDown() { return digitalRead(START_BUTTON) == LOW; }
 
-bool buttonPressed() {                       // товшилтыг нэг удаа буцаана
+bool buttonPressed() {
   if (!buttonDown()) return false;
   delay(25);
   if (!buttonDown()) return false;
-  while (buttonDown()) { }                   // тавихыг хүлээнэ
+  while (buttonDown()) { }
   delay(25);
   return true;
 }
 
-// ==========================================
-// ХӨДӨЛГӨӨНИЙ ТУСЛАХ
-// ==========================================
-// Тодорхой хугацаанд явна. Энэ хооронд ч QTR-ийг уншсаар байна (тоолуур шинэ
-// байлгахын тулд), гэхдээ зугтах маневрыг таслахгүй.
-void driveFor(int left, int right, uint16_t ms) {
+void driveFor(int left, int right, int pwm, uint16_t ms) {
   uint32_t t0 = millis();
-  drive(left, right);
+  setMotors(left, right, pwm);
   while (millis() - t0 < ms) {
     lineTask();
-    if (buttonDown()) { coast(); running = false; return; }
+    if (buttonDown()) { coastMotors(); running = false; return; }
   }
 }
 
 // ==========================================
-// ХҮРЭЭНЭЭС ЗУГТАХ — ХАМГИЙН ӨНДӨР ТЭРГҮҮЛЭХ ЭРХ
+// ХҮРЭЭНЭЭС ЗУГТАХ
 // ==========================================
 void escapeEdge(bool hitLeft, bool hitRight) {
-#if DEBUG_SERIAL
-  Serial.print(F("EDGE ")); Serial.print(hitLeft ? 'L' : '-'); Serial.println(hitRight ? 'R' : '-');
-#endif
+  brakeMotors(); delay(BRAKE_MS);              // тас зуурах
 
-  brakeMotors();
-  delay(BRAKE_MS);
-
-  driveFor(-SPD_ESC_BACK, -SPD_ESC_BACK, BACK_MS);
+  driveFor(-1, -1, SPD_BACK, BACK_MS);         // хоёулаа ухрах
   if (!running) return;
 
   if (hitLeft && hitRight) {
-    // Урд талаараа бүтэн хүрээн дээр гарсан -> эргэж төв рүү хар
-    driveFor(lastSeen > 0 ?  SPD_ESC_TURN : -SPD_ESC_TURN,
-             lastSeen > 0 ? -SPD_ESC_TURN :  SPD_ESC_TURN, TURN_180_MS);
-    searchDir = lastSeen;
+    driveFor(lastSeen > 0 ?  1 : -1,
+             lastSeen > 0 ? -1 :  1, SPD_ESC_TURN, TURN_180_MS);
   } else if (hitLeft) {
-    // Хүрээ зүүн урд байна -> баруун тийш эргэнэ
-    driveFor(SPD_ESC_TURN, -SPD_ESC_TURN, TURN_90_MS);
-    searchDir = +1;
+    driveFor(1, -1, SPD_ESC_TURN, TURN_90_MS); // баруун эргэх
+    lastSeen = 1;
   } else {
-    driveFor(-SPD_ESC_TURN, SPD_ESC_TURN, TURN_90_MS);
-    searchDir = -1;
+    driveFor(-1, 1, SPD_ESC_TURN, TURN_90_MS); // зүүн эргэх
+    lastSeen = -1;
   }
   if (!running) return;
 
-  brakeMotors();
-  delay(ESC_SETTLE_MS);
+  brakeMotors(); delay(ESC_SETTLE_MS);
   lineReset();
-  searchStart = millis();
-  pushStart = 0;
+
+  firstMove = false;                           // сохор дайралтыг цуцлана
 }
 
 // ==========================================
-// ДАЙРАЛТ
-// ==========================================
-void attack() {
-  if (eMid) {
-    if (eL45 && !eR45)      drive(SPD_PUSH * 3 / 5, SPD_PUSH);   // бага зэрэг зүүн
-    else if (eR45 && !eL45) drive(SPD_PUSH, SPD_PUSH * 3 / 5);   // бага зэрэг баруун
-    else                    drive(SPD_ATTACK, SPD_ATTACK);       // яг урд -> бүх хүчээр
-    if (pushStart == 0) pushStart = millis();
-    return;
-  }
-  pushStart = 0;
-
-  if (eL45 && eR45)   { drive(SPD_ATTACK, SPD_ATTACK); return; } // бараг урд, ойрхон
-  if (eL45)           { drive(SPD_TURN / 4, SPD_TURN); return; } // зүүн тийш нум
-  if (eR45)           { drive(SPD_TURN, SPD_TURN / 4); return; }
-  if (eL90)           { spin(-1, SPD_TURN); return; }            // байрандаа зүүн
-  if (eR90)           { spin(+1, SPD_TURN); return; }
-}
-
-// Удаан түлхээд хөдлөхгүй бол бага зэрэг ухраад өнцгөөр дахин дайрна
-void stallBreak() {
-#if ENABLE_STALL_BREAK
-  #if DEBUG_SERIAL
-    Serial.println(F("STALL"));
-  #endif
-  driveFor(-SPD_ESC_BACK, -SPD_ESC_BACK, 150);
-  if (!running) return;
-  driveFor(lastSeen > 0 ?  SPD_TURN : -SPD_TURN,
-           lastSeen > 0 ? -SPD_TURN :  SPD_TURN, 120);
-  pushStart = 0;
-  lineReset();
-#endif
-}
-
-// ==========================================
-// ХАЙЛТ
-// ==========================================
-void search() {
-  uint32_t t = millis() - searchStart;
-
-  if (t < SEARCH_SPIN_MS) {
-    spin(searchDir, SPD_SEARCH_SPIN);          // сүүлд харсан тал руугаа эргэнэ
-  } else if (t < (uint32_t)SEARCH_SPIN_MS + SEARCH_FWD_MS) {
-    drive(SPD_SEARCH, SPD_SEARCH);             // талбайг тэмтчинэ
-  } else {
-    searchStart = millis();
-    searchDir = -searchDir;                    // дараагийн эргэлт эсрэг тийш
-  }
-  servoRefresh();
-}
-
-// ==========================================
-// SETUP / LOOP
+// SETUP
 // ==========================================
 void setup() {
-#if DEBUG_SERIAL
-  Serial.begin(115200);
-#endif
-
   pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(PWMA, OUTPUT);
   pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT); pinMode(PWMB, OUTPUT);
-  pinMode(STBY, OUTPUT);
-  digitalWrite(STBY, HIGH);                    // драйверыг сэрээнэ
-  coast();
+  pinMode(STBY, OUTPUT); digitalWrite(STBY, HIGH);
+  coastMotors();
 
-  // Өрсөлдөгчийн 5 мэдрэгч (A0, A2..A5 нь дижитал орц болж чадна)
-  pinMode(left90,  INPUT);
-  pinMode(left45,  INPUT);
-  pinMode(mid,     INPUT);
-  pinMode(right45, INPUT);
-  pinMode(right90, INPUT);
-  // rLine (A1), lLine (A7) — зөвхөн analogRead, pinMode шаардлагагүй
+  pinMode(left90, INPUT); pinMode(left45, INPUT); pinMode(mid, INPUT);
+  pinMode(right45, INPUT); pinMode(right90, INPUT);
+  // rLine (A1), lLine (A7) — зөвхөн analogRead
 
-  pinMode(SERVO_PIN, OUTPUT);
-  digitalWrite(SERVO_PIN, LOW);
-
+  pinMode(SERVO_PIN, OUTPUT); digitalWrite(SERVO_PIN, LOW);
   pinMode(START_BUTTON, INPUT_PULLUP);
-
-#if DEBUG_SERIAL
-  Serial.println(F("MINI SUMO ready. D12 dar."));
-#endif
 }
 
+// ==========================================
+// LOOP - STATE MACHINE
+// ==========================================
 void loop() {
-  // ---------- ЗОГСОЛТ / ЭХЛҮҮЛЭХ ----------
   if (!running) {
-    coast();
+    coastMotors();
     if (buttonPressed()) {
       calibrateLine();                         // робот ХАР талбай дээр байна
       servoGoTo(SERVO_START_ANGLE);            // серво 90°
-      servoLastUs = millis();
 
-#if DEBUG_SERIAL
-      Serial.println(F("START..."));
-#endif
-      uint32_t t0 = millis();                  // дүрмийн хүлээлт
+      uint32_t t0 = millis();
       while (millis() - t0 < START_DELAY_MS) {
-        if (buttonDown()) { while (buttonDown()) {} return; }   // цуцлах
+        if (buttonDown()) { while (buttonDown()) {} return; }
       }
 
       lineReset();
       readEnemy();
-      searchDir   = lastSeen;
-      searchStart = millis();
-      pushStart   = 0;
-      running     = true;
+      firstMove = true;
+      firstMoveStart = millis();
+      running = true;
     }
     return;
   }
 
-  // ---------- ТУЛААН ----------
+  // 1. Хүрээг шалгах (үргэлж хамгийн түрүүнд)
   lineTask();
-
-  // 1) Хүрээ — юунаас ч түрүүнд
   if (lineL || lineR) { escapeEdge(lineL, lineR); return; }
 
-  // 2) Аюулгүйн зогсоолт
-  if (buttonPressed()) {
-    coast();
-    running = false;
-#if DEBUG_SERIAL
-    Serial.println(F("STOP"));
-#endif
-    return;
+  // 2. Аюулгүйн зогсоолт
+  if (buttonPressed()) { coastMotors(); running = false; return; }
+
+  // 3. Эхний сохор дайралт
+  if (firstMove) {
+    if (millis() - firstMoveStart < FIRST_CHARGE_MS) {
+      setMotors(1, 1, SPD_CHARGE);             // зөвхөн чигээрээ
+      return;
+    } else {
+      firstMove = false;
+    }
   }
 
-  // 3) Өрсөлдөгч
+  // 4. Өрсөлдөгчийн төлвөөр дайрах
+  //    ТЭМДГИЙН КОНВЕНЦ: 1 = урагш, -1 = ухрах, 0 = тоормос
   readEnemy();
 
-  if (eAny) {
-    attack();
-#if ENABLE_STALL_BREAK
-    if (pushStart && millis() - pushStart > STALL_MS) stallBreak();
-#endif
-  } else {
-    if (pushStart) { searchStart = millis(); searchDir = lastSeen; pushStart = 0; }
-    search();
+  if (eMid) {
+    setMotors(1, 1, SPD_ATTACK);               // яг урд: хоёулаа урагшаа
+  }
+  else if (eL45) {
+    setMotors(0, 1, SPD_CURVE);                // зүүн урд: зүүнээ түгжээд зүүн тийш нумална
+  }
+  else if (eR45) {
+    setMotors(1, 0, SPD_CURVE);                // баруун урд: баруунаа түгжээд баруун тийш
+  }
+  else if (eL90) {
+    setMotors(-1, 1, SPD_SPIN);                // зүүн зах: байрандаа ЗҮҮН эргэх
+  }
+  else if (eR90) {
+    setMotors(1, -1, SPD_SPIN);                // баруун зах: байрандаа БАРУУН эргэх
+  }
+  else {
+    // 5. Алдсан бол сүүлд харсан тал руугаа эргэж хайх
+    if (lastSeen > 0) setMotors(1, -1, SPD_SEARCH);   // баруун тийш
+    else              setMotors(-1, 1, SPD_SEARCH);   // зүүн тийш
   }
 }
