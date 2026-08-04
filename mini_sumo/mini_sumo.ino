@@ -149,6 +149,12 @@ bool dbgStream  = false;
 uint32_t lastDbg = 0;
 
 bool prevStarterGo = false;
+// Тулааныг хэн эхлүүлсэн бэ. Starter модуль эхлүүлсэн үед л түүнд зогсоох эрх
+// өгнө. Ингэснээр модуль "ЗОГС" барьж байсан ч D12 товч / BT 'G' ажиллана
+// (ширээн дээрх тест хийхэд чухал).
+#define STARTED_BY_BUTTON 0
+#define STARTED_BY_STARTER 1
+uint8_t startedBy = STARTED_BY_BUTTON;
 
 uint16_t thrL = 450, thrR = 450;
 uint8_t  hitL = 0, hitR = 0;
@@ -339,7 +345,8 @@ bool shouldStop() {
   if (btStopReq) { btStopReq = false; return true; }
   if (buttonDown()) return true;
 #if STARTER_ENABLED
-  if (!starterGo()) return true;               // модуль "ЗОГС" болголоо
+  // Зөвхөн модуль өөрөө эхлүүлсэн тулааныг зогсооно
+  if (startedBy == STARTED_BY_STARTER && !starterGo()) return true;
 #endif
   return false;
 }
@@ -476,7 +483,7 @@ void startMatch() {
     if (btStopReq) { btStopReq = false; return; }
     if (buttonDown()) { while (buttonDown()) {} return; }
 #if STARTER_ENABLED
-    if (!starterGo()) return;                  // модуль дуудлагаа буцаалаа
+    if (startedBy == STARTED_BY_STARTER && !starterGo()) return;  // модуль дуудлагаа буцаалаа
 #endif
   }
 
@@ -533,8 +540,12 @@ void loop() {
     bool starterEdge = (go && !prevStarterGo);   // модуль дөнгөж "ЯВ" болов
     prevStarterGo = go;
 
-    if (starterEdge || btStartReq || buttonPressed()) {
+    if (starterEdge) {
+      startedBy = STARTED_BY_STARTER;
+      startMatch();
+    } else if (btStartReq || buttonPressed()) {
       btStartReq = false;
+      startedBy = STARTED_BY_BUTTON;           // модуль энэ тулааныг зогсоохгүй
       startMatch();
     }
     return;
