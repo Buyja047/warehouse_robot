@@ -1,17 +1,18 @@
 /* =============================================================================
-   MINI SUMO - 3 НЭЭЛТИЙН ТАКТИК + BLUETOOTH + STARTER МОДУЛЬ
+   MINI SUMO - БҮРЭН BLUETOOTH УДИРДЛАГА
    Чиглэл: 1 (Урагш), 0 (Тоормос), -1 (Ухрах)
-   Хурд:   PWMA/PWMB пин дээр analogWrite (0..255), PWM_MAX-аар хязгаарлана
+
+   ТОВЧГҮЙ. Эхлүүлэх, зогсоох, тактик сонгох бүгд Bluetooth-оор.
+   D12 сул болсон.
 
    ЧУХАЛ (Timer1): Nano дээр Servo сан Timer1-ийг эзэлж D9/D10-ийн analogWrite-ийг
    унтраадаг. PWMB = D9 тул Servo.h ашиглаж БОЛОХГҮЙ — серво импульсийг гараар
-   үүсгэсэн (setup-д зөвхөн нэг удаа), Timer1 чөлөөтэй үлдэнэ.
+   үүсгэсэн, Timer1 чөлөөтэй үлдэнэ.
 
    ЧУХАЛ (A6/A7): lLine = A7 нь зөвхөн аналог орц. analogRead-аар л уншина.
 
-   ЧУХАЛ (Bluetooth): HC-05/06 нь D0(RX)/D1(TX) буюу техник хангамжийн Serial
-   дээр сууна. Модуль залгаастай үед Arduino IDE-ээс код АЧААЛЛАХГҮЙ —
-   ачаалахын өмнө BT модулийн RX/TX-ийг салга.
+   ЧУХАЛ (Bluetooth): HC-05/06 нь D0(RX)/D1(TX) дээр сууна. Модуль залгаастай
+   үед код АЧААЛЛАХГҮЙ — upload хийхийн өмнө RX/TX-ийг салга.
    ============================================================================= */
 
 #define PWMA 3
@@ -31,35 +32,40 @@
 #define lLine   A7
 
 #define SERVO_PIN 10
-#define START_BUTTON 12
-
-// --- ШИНЭ ПИН ----------------------------------------------------------------
-#define STARTER_PIN   2       // starter модулийн дохио (сул байсан пин)
-// Bluetooth: D0 = RX, D1 = TX (техник хангамжийн Serial)
+#define STARTER_PIN 2         // starter модулийн дохио
+// D12 — сул (товч хасагдсан)
+// Bluetooth: D0 = RX, D1 = TX
 
 // =============================================================================
-// STARTER МОДУЛЬ
-// =============================================================================
-#define STARTER_ENABLED    1  // модуль ЗАЛГААГҮЙ бол 0 болго (эс бөгөөс пин
-                              // хөвж робот өөрөө зогсоно)
-#define STARTER_GO   HIGH     // модуль "ЯВ" гэхэд өгөх түвшин (LOW бол сольж өг)
-#define STARTER_PULLUP     1  // ил задгай коллектор гаралттай модульд 1
-
-// =============================================================================
-// BLUETOOTH
+// BLUETOOTH  — цорын ганц удирдлага
 // =============================================================================
 #define BT_ENABLED         1
 #define BT_BAUD         9600  // HC-06 ихэвчлэн 9600, HC-05 нь 38400 байж болно
 
 /*  BLUETOOTH КОМАНДУУД (терминалаас нэг үсэг илгээнэ):
-      1 эсвэл L : ЗҮҮН талаар дайрах тактик
-      2 эсвэл S : ЧИГЭЭРЭЭ дайрах тактик
-      3 эсвэл R : БАРУУН талаар дайрах тактик
-      G         : тулаан эхлүүлэх (starter модулийн оронд)
-      X         : яаралтай зогсоох
-      D         : QTR утга дамжуулахыг асаах/унтраах (босго тааруулахад)
-      ?         : одоогийн төлөв харах
+
+      --- НЭЭЛТИЙН ТАКТИК СОНГОХ (эхлүүлэхээс өмнө) ---
+      1 эсвэл S : ЧИГЭЭРЭЭ дайрах
+      2 эсвэл L : ЗҮҮН талаар тойрч дайрах
+      3 эсвэл R : БАРУУН талаар тойрч дайрах
+
+      --- УДИРДЛАГА ---
+      G : тулаан ЭХЛҮҮЛЭХ (сонгосон тактикаар)
+      X : ЗОГСООХ
+      D : QTR утга дамжуулахыг асаах/унтраах (босго тааруулахад)
+      ? : төлөв ба командын жагсаалт харах
 */
+
+// =============================================================================
+// STARTER МОДУЛЬ  (сонголтоор — тэмцээний дүрмийн дагуу)
+// =============================================================================
+#define STARTER_ENABLED    1  // модуль ЗАЛГААГҮЙ бол 0 болго
+#define STARTER_GO   HIGH     // модуль "ЯВ" гэхэд өгөх түвшин (LOW бол сольж өг)
+#define STARTER_PULLUP     1  // ил задгай коллектор гаралттай модульд 1
+
+#if !BT_ENABLED && !STARTER_ENABLED
+#error "Ehluuleh arga alga: BT_ENABLED esvel STARTER_ENABLED nэг нь 1 baih ystoi"
+#endif
 
 // =============================================================================
 // НЭЭЛТИЙН ТАКТИК
@@ -69,77 +75,57 @@
 #define STRAT_RIGHT    2
 #define STRAT_DEFAULT  STRAT_STRAIGHT   // BT-ээр сонгоогүй үеийн анхны тактик
 
-#define OPEN_TURN_MS     180  // хажуу тийш эргэх хугацаа (нээлтийн 1-р шат)
-#define OPEN_DASH_MS     420  // хажуугаар давших хугацаа (2-р шат)
-#define OPEN_BACK_MS     200  // төв рүү эргэж харах хугацаа (3-р шат)
+#define OPEN_TURN_MS     180  // хажуу тийш эргэх (тойролтын 1-р шат)
+#define OPEN_DASH_MS     420  // хажуугаар давших (2-р шат)
+#define OPEN_BACK_MS     200  // төв рүү эргэж харах (3-р шат)
 #define OPEN_STRAIGHT_MS 500  // чигээрээ дайрах хугацаа
 
 // =============================================================================
-// ХУРДНЫ ТОХИРГОО (0..255)
+// ХУРД (0..255)
 // =============================================================================
-#define SPEED_SCALE     0.60  // бүх хурдыг нэг дор мушгина
-#define PWM_MAX          100  // ХАТУУ ДЭЭД ХЯЗГААР. Үүнээс дээш хурд гарахгүй.
-                              // (Хурдыг бүхэлд нь өсгөх бол ЭНИЙГ өсгө, 100 -> 150)
+#define SPEED_SCALE     0.60
+#define PWM_MAX          100  // хатуу дээд хязгаар
 
-#define SPD_CHARGE       200  // нээлтийн давшилт
-#define SPD_ATTACK       200  // mid: яг урдаас түлхэх
-#define SPD_CURVE        150  // 45°: хурц нум
-#define SPD_SPIN         140  // 90°: байрандаа эргэх
-#define SPD_SEARCH       135  // өрсөлдөгчийг алдсан үеийн эргэлт
-#define SPD_OPEN_TURN    180  // нээлтийн эргэлт
+#define SPD_CHARGE       200
+#define SPD_ATTACK       200
+#define SPD_CURVE        150
+#define SPD_SPIN         140
+#define SPD_SEARCH       135
+#define SPD_OPEN_TURN    180
+#define SPD_BACK         200
+#define SPD_ESC_TURN     200
+#define SPD_ESC_FWD      180
 
-// ЗУГТАХ ХУРД нь ДАЙРАХ ХУРДНААС БАГА БАЙЖ БОЛОХГҮЙ — эс бөгөөс өөрийн
-// импульсээрээ хүрээнээс гарна. Тиймээс SPD_ATTACK-тай тэнцүү байлгав.
-#define SPD_BACK         200  // хүрээнээс ухрах
-#define SPD_ESC_TURN     200  // хүрээнээс зайлж эргэх
-#define SPD_ESC_FWD      180  // эргэсний дараа төв рүү явах
+#define PWM_MIN           55
 
-#define PWM_MIN           55  // үүнээс доош мотор огт эргэхгүй (үхмэл бүс)
-
-// --- Мотор утасны чиглэл -----------------------------------------------------
-// Энэ роботын мотор урвуу холбоостой: AIN1=LOW/AIN2=HIGH үед УРАГШ явдаг.
-// Нэг дугуй нь эсрэг эргэвэл ЗӨВХӨН тэр талынхыг нь 0 болго.
 #define LEFT_INVERT        1
 #define RIGHT_INVERT       1
 
 // =============================================================================
-// ХУГАЦААНЫ ТОХИРГОО
-//
-// ХУРД ӨӨРЧЛӨГДДӨГГҮЙ ТУЛ ЗУГТАЛТЫГ ЗӨВХӨН ЭНД ЗОХИЦУУЛНА.
-// Мотор тогтмол хурдтай эргэж байгаа тул хугацаа л цорын ганц хөшүүрэг.
-//   Эргэлт дутуу (хүрээ рүү буцаж орно)  -> TURN_*_MS ↑
-//   Эргэлт хэтэрнэ                       -> TURN_*_MS ↓
-//   Хүрээнээс бүрэн салахгүй             -> BACK_MIN_MS ↑
-//   Ард талаараа гарна                   -> BACK_MAX_MS ↓
+// ХУГАЦАА  (зугталтыг ЗӨВХӨН эндээс зохицуулна)
+//   Эргэлт дутуу -> TURN_*_MS ↑ | хэтэрнэ -> ↓
+//   Хүрээнээс салахгүй -> BACK_MIN_MS ↑ | ард гарна -> BACK_MAX_MS ↓
 // =============================================================================
 #define START_DELAY_MS  5000
-#define BRAKE_MS          20  // 60 -> 20.  Зөвхөн импульс тасална
-
-// Ухралт: тогтмол хугацаа биш, ЦАГААНААС БҮРЭН САЛТАЛ ухарна.
-#define BACK_MIN_MS       60  // 130 -> 60   (доод хязгаар)
-#define BACK_MAX_MS      260  // 450 -> 260  (дээд хамгаалалт — ард нь ирмэг байна)
-#define BACK_CLEAR_MS     35  // 90  -> 35   (цагаан алга болсны баталгаажуулалт)
-
-#define TURN_90_MS       180  // 360 -> 180
-#define TURN_180_MS      320  // 620 -> 320
-#define ESC_SETTLE_MS     10  // 40  -> 10
-#define ESC_FWD_MS       250  // 380 -> 250. Эргэсний дараа төв рүү чигээрээ явах
+#define BRAKE_MS          20
+#define BACK_MIN_MS       60
+#define BACK_MAX_MS      260
+#define BACK_CLEAR_MS     35
+#define TURN_90_MS       180
+#define TURN_180_MS      320
+#define ESC_SETTLE_MS     10
+#define ESC_FWD_MS       250
 
 // =============================================================================
-// МЭДРЭГЧИЙН ТОХИРГОО
+// МЭДРЭГЧ
 // =============================================================================
 #define ENEMY_ACTIVE    HIGH
 #define AUTO_CALIBRATE     1
-
-// WHITE_FACTOR: босго = хар_дундаж * энэ утга.
-// Хэт БАГА бол хүрээгээ огт танихгүй, хэт ИХ бол зурагдсан хэсгийг цагаан гэж
-// үзээд ухарна. 'D' команд илгээж бодит утгаа хараад тааруул.
 #define WHITE_FACTOR    0.60
 #define MIN_BLACK_MARGIN 120
-#define LINE_CONFIRM       5  // дараалсан цагаан уншилт (5 * 700us = 3.5 ms)
+#define LINE_CONFIRM       5
 #define LINE_SAMPLE_US   700
 
-// --- Серво -------------------------------------------------------------------
 #define SERVO_START_ANGLE 90
 #define SERVO_US_MIN     600
 #define SERVO_US_MAX    2400
@@ -156,6 +142,13 @@ uint32_t lastDbg = 0;
 
 bool prevStarterGo = false;
 
+// Тулааныг хэн эхлүүлсэн бэ. Starter модуль зөвхөн ӨӨРӨӨ эхлүүлсэн тулааныг
+// зогсооно. Ингэснээр модуль "ЗОГС" барьж байсан ч BT 'G' ажиллана — товчгүй
+// болсон тул энэ нь ЗААВАЛ хэрэгтэй, эс бөгөөс эхлүүлэх ямар ч арга үлдэхгүй.
+#define STARTED_BY_BT      0
+#define STARTED_BY_STARTER 1
+uint8_t startedBy = STARTED_BY_BT;
+
 uint16_t thrL = 450, thrR = 450;
 uint8_t  hitL = 0, hitR = 0;
 bool     lineL = false, lineR = false;
@@ -165,12 +158,12 @@ bool eL90, eL45, eMid, eR45, eR90, eAny;
 int8_t lastSeen = 1;
 
 // ==========================================
-// МОТОР УДИРДЛАГА
+// МОТОР
 // ==========================================
 static uint8_t scaleSpeed(int pwm) {
   long v = (long)(pwm * SPEED_SCALE);
-  if (v > PWM_MAX) v = PWM_MAX;               // хатуу дээд хязгаар
-  if (v > 0 && v < PWM_MIN) v = PWM_MIN;      // үхмэл бүсийг давуулна
+  if (v > PWM_MAX) v = PWM_MAX;
+  if (v > 0 && v < PWM_MIN) v = PWM_MIN;
   if (v < 0) v = 0;
   return (uint8_t)v;
 }
@@ -186,8 +179,7 @@ void setMotors(int l, int r, int pwm) {
   r = -r;
 #endif
 
-  // Зүүн мотор (A)
-  if (l == 0) {                                       // богино тоормос
+  if (l == 0) {
     digitalWrite(AIN1, HIGH); digitalWrite(AIN2, HIGH); analogWrite(PWMA, 255);
   } else {
     digitalWrite(AIN1, (l > 0) ? HIGH : LOW);
@@ -195,7 +187,6 @@ void setMotors(int l, int r, int pwm) {
     analogWrite(PWMA, p);
   }
 
-  // Баруун мотор (B)
   if (r == 0) {
     digitalWrite(BIN1, HIGH); digitalWrite(BIN2, HIGH); analogWrite(PWMB, 255);
   } else {
@@ -207,7 +198,7 @@ void setMotors(int l, int r, int pwm) {
 
 void brakeMotors() { setMotors(0, 0, 0); }
 
-void coastMotors() {                                   // чөлөөтэй зогсолт
+void coastMotors() {
   digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0);
   digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0);
 }
@@ -233,7 +224,6 @@ void lineTask() {
 
 void lineReset() { hitL = hitR = 0; lineL = lineR = false; lastSampleUs = micros(); }
 
-// Ямар нэг цагаан уншилт байна уу (баталгаажаагүй ч)
 static inline bool anyWhite() { return (hitL > 0) || (hitR > 0); }
 
 void calibrateLine() {
@@ -264,7 +254,7 @@ void calibrateLine() {
 }
 
 // ==========================================
-// МЭДРЭГЧ УНШИХ
+// ӨРСӨЛДӨГЧ
 // ==========================================
 static inline bool ir(uint8_t pin) { return digitalRead(pin) == ENEMY_ACTIVE; }
 
@@ -279,8 +269,8 @@ void readEnemy() {
 // BLUETOOTH
 // ==========================================
 const char* stratName() {
-  if (strategy == STRAT_LEFT)  return "LEFT";
-  if (strategy == STRAT_RIGHT) return "RIGHT";
+  if (strategy == STRAT_LEFT)  return "LEFT-CIRCLE";
+  if (strategy == STRAT_RIGHT) return "RIGHT-CIRCLE";
   return "STRAIGHT";
 }
 
@@ -292,18 +282,25 @@ void btReport() {
 #endif
 }
 
+void btHelp() {
+#if BT_ENABLED
+  Serial.println(F("1/S=straight 2/L=left 3/R=right | G=go X=stop D=debug ?=help"));
+  btReport();
+#endif
+}
+
 void btTask() {
 #if BT_ENABLED
   while (Serial.available()) {
     char c = Serial.read();
     switch (c) {
-      case '1': case 'l': case 'L': strategy = STRAT_LEFT;     btReport(); break;
-      case '2': case 's': case 'S': strategy = STRAT_STRAIGHT; btReport(); break;
+      case '1': case 's': case 'S': strategy = STRAT_STRAIGHT; btReport(); break;
+      case '2': case 'l': case 'L': strategy = STRAT_LEFT;     btReport(); break;
       case '3': case 'r': case 'R': strategy = STRAT_RIGHT;    btReport(); break;
       case 'g': case 'G': btStartReq = true;  break;
       case 'x': case 'X': btStopReq  = true;  break;
       case 'd': case 'D': dbgStream = !dbgStream; break;
-      case '?':           btReport(); break;
+      case '?': case 'h': case 'H': btHelp(); break;
       default: break;
     }
   }
@@ -318,7 +315,7 @@ void btTask() {
 }
 
 // ==========================================
-// STARTER МОДУЛЬ / ТОВЧ
+// STARTER МОДУЛЬ
 // ==========================================
 bool starterGo() {
 #if STARTER_ENABLED
@@ -328,24 +325,13 @@ bool starterGo() {
 #endif
 }
 
-bool buttonDown() { return digitalRead(START_BUTTON) == LOW; }
-
-bool buttonPressed() {
-  if (!buttonDown()) return false;
-  delay(25);
-  if (!buttonDown()) return false;
-  while (buttonDown()) { }
-  delay(25);
-  return true;
-}
-
 // Тулааны үед зогсоох дохио ирсэн үү
 bool shouldStop() {
   btTask();
   if (btStopReq) { btStopReq = false; return true; }
-  if (buttonDown()) return true;
 #if STARTER_ENABLED
-  if (!starterGo()) return true;               // модуль "ЗОГС" болголоо
+  // Зөвхөн модуль өөрөө эхлүүлсэн тулааныг зогсооно
+  if (startedBy == STARTED_BY_STARTER && !starterGo()) return true;
 #endif
   return false;
 }
@@ -353,7 +339,6 @@ bool shouldStop() {
 // ==========================================
 // ХӨДӨЛГӨӨН
 // ==========================================
-// Зугтах маневрын үе шат: хугацаа дуустал заавал гүйцэтгэнэ
 void driveFor(int left, int right, int pwm, uint16_t ms) {
   uint32_t t0 = millis();
   setMotors(left, right, pwm);
@@ -363,22 +348,20 @@ void driveFor(int left, int right, int pwm, uint16_t ms) {
   }
 }
 
-// Дайралт/нээлтийн үе шат: хүрээ эсвэл өрсөлдөгч илэрвэл тасална.
-// true буцаавал таслагдсан гэсэн үг.
+// Хүрээ эсвэл өрсөлдөгч илэрвэл тасална. true = таслагдсан.
 bool moveFor(int left, int right, int pwm, uint16_t ms, bool abortOnEnemy) {
   uint32_t t0 = millis();
   setMotors(left, right, pwm);
   while (millis() - t0 < ms) {
     lineTask();
-    if (lineL || lineR) return true;                 // хүрээ — loop зугтаана
+    if (lineL || lineR) return true;
     if (shouldStop()) { coastMotors(); running = false; return true; }
     if (abortOnEnemy) { readEnemy(); if (eAny) return true; }
   }
   return false;
 }
 
-// Цагаанаас БҮРЭН салтал ухарна. Энэ нь тогтмол хугацаанаас найдвартай:
-// эргэхээсээ өмнө хүрээнээс гарсан эсэхээ баталгаажуулна.
+// Цагаанаас БҮРЭН салтал ухарна
 void reverseUntilClear() {
   uint32_t t0 = millis();
   uint32_t clearSince = 0;
@@ -389,14 +372,14 @@ void reverseUntilClear() {
     if (shouldStop()) { coastMotors(); running = false; return; }
 
     if (anyWhite()) {
-      clearSince = 0;                                // дахиад цагаан харагдлаа
+      clearSince = 0;
     } else if (clearSince == 0) {
-      clearSince = millis();                         // цагаан алга болов
+      clearSince = millis();
     }
 
     if (millis() - t0 >= BACK_MIN_MS &&
         clearSince && (millis() - clearSince) >= BACK_CLEAR_MS) {
-      return;                                        // цэвэр хар дээр гарлаа
+      return;
     }
   }
 }
@@ -405,19 +388,19 @@ void reverseUntilClear() {
 // ХҮРЭЭНЭЭС ЗУГТАХ
 // ==========================================
 void escapeEdge(bool hitLeft, bool hitRight) {
-  brakeMotors(); delay(BRAKE_MS);              // тас зуурах
+  brakeMotors(); delay(BRAKE_MS);
 
-  reverseUntilClear();                         // цагаанаас бүрэн салтал ухрах
+  reverseUntilClear();
   if (!running) return;
 
   if (hitLeft && hitRight) {
     driveFor(lastSeen > 0 ?  1 : -1,
              lastSeen > 0 ? -1 :  1, SPD_ESC_TURN, TURN_180_MS);
   } else if (hitLeft) {
-    driveFor(1, -1, SPD_ESC_TURN, TURN_90_MS); // баруун эргэх
+    driveFor(1, -1, SPD_ESC_TURN, TURN_90_MS);   // баруун эргэх
     lastSeen = 1;
   } else {
-    driveFor(-1, 1, SPD_ESC_TURN, TURN_90_MS); // зүүн эргэх
+    driveFor(-1, 1, SPD_ESC_TURN, TURN_90_MS);   // зүүн эргэх
     lastSeen = -1;
   }
   if (!running) return;
@@ -425,8 +408,7 @@ void escapeEdge(bool hitLeft, bool hitRight) {
   brakeMotors(); delay(ESC_SETTLE_MS);
   lineReset();
 
-  // Төв рүү чигээрээ явна (хүрээ/өрсөлдөгч илэрвэл тасарна)
-  moveFor(1, 1, SPD_ESC_FWD, ESC_FWD_MS, true);
+  moveFor(1, 1, SPD_ESC_FWD, ESC_FWD_MS, true);  // төв рүү чигээрээ
 }
 
 // ==========================================
@@ -438,7 +420,7 @@ void openingMove() {
     if (moveFor(-1,  1, SPD_OPEN_TURN, OPEN_TURN_MS, true)) return;
     if (moveFor( 1,  1, SPD_CHARGE,    OPEN_DASH_MS, true)) return;
     moveFor( 1, -1, SPD_OPEN_TURN, OPEN_BACK_MS, true);
-    lastSeen = 1;                              // өрсөлдөгч баруун талд байх магадлалтай
+    lastSeen = 1;
   }
   else if (strategy == STRAT_RIGHT) {
     if (moveFor( 1, -1, SPD_OPEN_TURN, OPEN_TURN_MS, true)) return;
@@ -452,7 +434,7 @@ void openingMove() {
 }
 
 // ==========================================
-// СЕРВО (Timer1 хэрэглэхгүй, гараар импульс)
+// СЕРВО
 // ==========================================
 void servoPulse(int angle) {
   int us = map(constrain(angle, 0, 180), 0, 180, SERVO_US_MIN, SERVO_US_MAX);
@@ -479,10 +461,9 @@ void startMatch() {
   uint32_t t0 = millis();                      // дүрмийн 5 сек
   while (millis() - t0 < START_DELAY_MS) {
     btTask();
-    if (btStopReq) { btStopReq = false; return; }
-    if (buttonDown()) { while (buttonDown()) {} return; }
+    if (btStopReq) { btStopReq = false; return; }   // BT 'X' — цуцлах
 #if STARTER_ENABLED
-    if (!starterGo()) return;                  // модуль дуудлагаа буцаалаа
+    if (startedBy == STARTED_BY_STARTER && !starterGo()) return;
 #endif
   }
 
@@ -511,7 +492,6 @@ void setup() {
   // rLine (A1), lLine (A7) — зөвхөн analogRead
 
   pinMode(SERVO_PIN, OUTPUT); digitalWrite(SERVO_PIN, LOW);
-  pinMode(START_BUTTON, INPUT_PULLUP);
 
 #if STARTER_PULLUP
   pinMode(STARTER_PIN, INPUT_PULLUP);
@@ -521,7 +501,8 @@ void setup() {
   prevStarterGo = starterGo();
 
 #if BT_ENABLED
-  Serial.println(F("MINI SUMO ready. 1/2/3=strat G=go X=stop D=debug"));
+  Serial.println(F("MINI SUMO ready (BT only)."));
+  btHelp();
 #endif
 }
 
@@ -536,11 +517,15 @@ void loop() {
     coastMotors();
 
     bool go = starterGo();
-    bool starterEdge = (go && !prevStarterGo);   // модуль дөнгөж "ЯВ" болов
+    bool starterEdge = (go && !prevStarterGo);
     prevStarterGo = go;
 
-    if (starterEdge || btStartReq || buttonPressed()) {
+    if (starterEdge) {
+      startedBy = STARTED_BY_STARTER;
+      startMatch();
+    } else if (btStartReq) {
       btStartReq = false;
+      startedBy = STARTED_BY_BT;               // модуль энэ тулааныг зогсоохгүй
       startMatch();
     }
     return;
@@ -551,7 +536,7 @@ void loop() {
   lineTask();
   if (lineL || lineR) { escapeEdge(lineL, lineR); return; }
 
-  // 2. Зогсоох дохио (BT 'X', товч, starter модуль)
+  // 2. Зогсоох дохио (BT 'X' эсвэл starter модуль)
   if (shouldStop()) {
     coastMotors();
     running = false;
@@ -563,27 +548,26 @@ void loop() {
   }
 
   // 3. Өрсөлдөгчийн төлвөөр дайрах
-  //    ТЭМДГИЙН КОНВЕНЦ: 1 = урагш, -1 = ухрах, 0 = тоормос
   readEnemy();
 
   if (eMid) {
-    setMotors(1, 1, SPD_ATTACK);               // яг урд: хоёулаа урагшаа
+    setMotors(1, 1, SPD_ATTACK);               // яг урд
   }
   else if (eL45) {
-    setMotors(0, 1, SPD_CURVE);                // зүүн урд: зүүнээ түгжээд зүүн тийш
+    setMotors(0, 1, SPD_CURVE);                // зүүн урд
   }
   else if (eR45) {
-    setMotors(1, 0, SPD_CURVE);                // баруун урд: баруунаа түгжээд баруун тийш
+    setMotors(1, 0, SPD_CURVE);                // баруун урд
   }
   else if (eL90) {
-    setMotors(-1, 1, SPD_SPIN);                // зүүн зах: байрандаа ЗҮҮН эргэх
+    setMotors(-1, 1, SPD_SPIN);                // зүүн зах
   }
   else if (eR90) {
-    setMotors(1, -1, SPD_SPIN);                // баруун зах: байрандаа БАРУУН эргэх
+    setMotors(1, -1, SPD_SPIN);                // баруун зах
   }
   else {
     // 4. Алдсан бол сүүлд харсан тал руугаа эргэж хайх
-    if (lastSeen > 0) setMotors(1, 0, SPD_SEARCH);   // баруун тийш
-    else              setMotors(0, 1, SPD_SEARCH);   // зүүн тийш
+    if (lastSeen > 0) setMotors(1, 0, SPD_SEARCH);
+    else              setMotors(0, 1, SPD_SEARCH);
   }
 }
