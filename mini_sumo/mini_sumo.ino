@@ -56,7 +56,10 @@
       X : ЗОГСООХ
       D : QTR утга дамжуулахыг асаах/унтраах (босго тааруулахад)
       C : ЦАГААН КАЛИБРОВК — мэдрэгчээ ЦАГААН ХҮРЭЭН ДЭЭР тавьчихаад дар.
-          EEPROM-д хадгална, нэг л удаа хийхэд хангалттай.
+      B : ЗУРАГДСАН КАЛИБРОВК — дарсны дараа 6 секундын дотор роботоо
+          талбайн ХАМГИЙН МУУ ЗУРАГДСАН хэсгүүд дээгүүр гүйлгэ. Робот хамгийн
+          тод (цагаанд хамгийн ойр) уншилтыг тогтооно.
+      Хоёулаа EEPROM-д хадгалагдана, нэг л удаа хийхэд хангалттай.
       ? : төлөв ба командын жагсаалт харах
 */
 
@@ -135,8 +138,15 @@
    ЖИШЭЭ: цагаан 200, хар 800, CAL_K 0.30 -> босго 380.
           Бартаа ~500 уншина -> 500 > 380 тул ҮЛ ТООНО.
           Жинхэнэ хүрээ ~200 -> ажиллана.                                    */
-#define CAL_K           0.30  // БАРТАА мэдэрвэл ↓ (0.22), хүрээгээ алдвал ↑ (0.45)
-#define CAL_MIN_SPREAD    80  // хар/цагааны зөрүү үүнээс бага бол калибровк хүчингүй
+/* Босго = цагаан + (лавлагаа - цагаан) * CAL_K
+   Лавлагаа нь:
+     - 'B' калибровк хийсэн бол ХАМГИЙН ТОД ЗУРАГДСАН уншилт (хамгийн зөв),
+     - үгүй бол хар талбайн дундаж.
+   Зурагдсаны лавлагаатай үед CAL_K нь цагаан ба зурагдсаны хооронд хаана
+   босго суухыг заана:  0.60 = зурагдсан тал руугаа 60%, аль алинаас зайтай. */
+#define CAL_K           0.60  // ЗУРАГДСАНЫГ мэдэрвэл ↓ (0.45), хүрээгээ алдвал ↑ (0.75)
+#define CAL_MIN_SPREAD    80  // лавлагаа/цагааны зөрүү үүнээс бага бол хүчингүй
+#define SCUFF_SWEEP_MS  6000  // 'B' командын дараах гүйлгэх хугацаа
 
 // Цагааны калибровк ХИЙГЭЭГҮЙ үеийн нөөц арга (зөвхөн хараас):
 #define WHITE_FACTOR    0.45  // 0.60 хэт зөөлөн байсан
@@ -162,7 +172,8 @@ bool dbgStream  = false;
 uint32_t lastDbg = 0;
 
 bool prevStarterGo = false;
-bool btCalReq = false;
+bool btCalReq = false;      // 'C' — цагаан
+bool btScuffReq = false;    // 'B' — зурагдсан
 
 // Тулааныг хэн эхлүүлсэн бэ. Starter модуль зөвхөн ӨӨРӨӨ эхлүүлсэн тулааныг
 // зогсооно. Ингэснээр модуль "ЗОГС" барьж байсан ч BT 'G' ажиллана — товчгүй
@@ -172,8 +183,10 @@ bool btCalReq = false;
 uint8_t startedBy = STARTED_BY_BT;
 
 uint16_t thrL = 450, thrR = 450;
-uint16_t whiteL = 0, whiteR = 0;      // EEPROM-д хадгалсан цагааны лавлагаа
+uint16_t whiteL = 0, whiteR = 0;      // EEPROM: цагаан хүрээний уншилт
+uint16_t scuffL = 0, scuffR = 0;      // EEPROM: ХАМГИЙН ТОД зурагдсан уншилт
 bool     haveWhiteCal = false;
+bool     haveScuffCal = false;
 uint8_t  hitL = 0, hitR = 0;
 bool     lineL = false, lineR = false;
 uint32_t lastSampleUs = 0;
@@ -264,35 +277,88 @@ void sampleQtr(uint16_t *outL, uint16_t *outR) {
 }
 
 // ---- EEPROM: цагааны лавлагаа ----
-#define EE_MAGIC       0xA5C3
-#define EE_ADDR_MAGIC  0
-#define EE_ADDR_WHITE  2
+#define EE_MAGIC       0x5A7E
+#define EE_ADDR_MAGIC  0     // uint16 танигч
+#define EE_ADDR_FLAGS  2     // uint16 bit0 = цагаан, bit1 = зурагдсан
+#define EE_ADDR_WHITE  4     // uint16 x2
+#define EE_ADDR_SCUFF  8     // uint16 x2
 
-void whiteCalLoad() {
-  uint16_t magic = 0;
+void calLoad() {
+  uint16_t magic = 0, flags = 0;
   EEPROM.get(EE_ADDR_MAGIC, magic);
   if (magic != EE_MAGIC) return;
-  EEPROM.get(EE_ADDR_WHITE, whiteL);
-  EEPROM.get(EE_ADDR_WHITE + 2, whiteR);
-  haveWhiteCal = true;
+  EEPROM.get(EE_ADDR_FLAGS, flags);
+  if (flags & 0x01) {
+    EEPROM.get(EE_ADDR_WHITE, whiteL);
+    EEPROM.get(EE_ADDR_WHITE + 2, whiteR);
+    haveWhiteCal = true;
+  }
+  if (flags & 0x02) {
+    EEPROM.get(EE_ADDR_SCUFF, scuffL);
+    EEPROM.get(EE_ADDR_SCUFF + 2, scuffR);
+    haveScuffCal = true;
+  }
 }
 
-void whiteCalSave() {
+void calSave() {
   uint16_t magic = EE_MAGIC;
+  uint16_t flags = (haveWhiteCal ? 0x01 : 0) | (haveScuffCal ? 0x02 : 0);
   EEPROM.put(EE_ADDR_MAGIC, magic);
+  EEPROM.put(EE_ADDR_FLAGS, flags);
   EEPROM.put(EE_ADDR_WHITE, whiteL);
   EEPROM.put(EE_ADDR_WHITE + 2, whiteR);
-  haveWhiteCal = true;
+  EEPROM.put(EE_ADDR_SCUFF, scuffL);
+  EEPROM.put(EE_ADDR_SCUFF + 2, scuffR);
 }
 
 // BT 'C' — мэдрэгч ЦАГААН ХҮРЭЭН дээр байхад дуудна
 void calibrateWhite() {
   sampleQtr(&whiteL, &whiteR);
-  whiteCalSave();
+  haveWhiteCal = true;
+  calSave();
 #if BT_ENABLED
   Serial.print(F("WHITE CAL saved = ")); Serial.print(whiteL);
   Serial.print('/'); Serial.println(whiteR);
   Serial.println(F("Now put robot on BLACK and send G."));
+#endif
+  lineReset();
+}
+
+// BT 'B' — SCUFF_SWEEP_MS хугацаанд роботоо ХАМГИЙН МУУ ЗУРАГДСАН хэсгүүд
+// дээгүүр гүйлгэнэ. Хамгийн ТОД (цагаанд хамгийн ойр) уншилтыг тогтооно.
+// Энэ нь босгыг таамаглахаа болиулж, бодит хамгийн муу тохиолдол дээр суурилуулна.
+void calibrateScuff() {
+#if BT_ENABLED
+  Serial.print(F("SCUFF SWEEP ")); Serial.print(SCUFF_SWEEP_MS / 1000);
+  Serial.println(F("s - drag robot over the WORST scuffed areas NOW"));
+#endif
+  uint16_t minL = 1023, minR = 1023;
+  uint32_t t0 = millis();
+  uint32_t lastP = 0;
+
+  while (millis() - t0 < SCUFF_SWEEP_MS) {
+    uint16_t l = analogRead(lLine);
+    uint16_t r = analogRead(rLine);
+    if (l < minL) minL = l;
+    if (r < minR) minR = r;
+
+#if BT_ENABLED
+    if (millis() - lastP >= 500) {                 // явцыг харуулна
+      lastP = millis();
+      Serial.print(F("min=")); Serial.print(minL);
+      Serial.print('/'); Serial.println(minR);
+    }
+#endif
+    delay(2);
+  }
+
+  scuffL = minL; scuffR = minR;
+  haveScuffCal = true;
+  calSave();
+
+#if BT_ENABLED
+  Serial.print(F("SCUFF CAL saved = ")); Serial.print(scuffL);
+  Serial.print('/'); Serial.println(scuffR);
 #endif
   lineReset();
 }
@@ -302,13 +368,18 @@ void calibrateLine() {
   uint16_t blackL, blackR;
   sampleQtr(&blackL, &blackR);
 
+  // Лавлагаа: зурагдсаны калибровк байвал ТҮҮНИЙГ (хамгийн муу тохиолдол),
+  // үгүй бол хар талбайн дунджийг ашиглана.
+  uint16_t refL = haveScuffCal ? scuffL : blackL;
+  uint16_t refR = haveScuffCal ? scuffR : blackR;
+
   bool ok = haveWhiteCal &&
-            (blackL > whiteL + CAL_MIN_SPREAD) &&
-            (blackR > whiteR + CAL_MIN_SPREAD);
+            (refL > whiteL + CAL_MIN_SPREAD) &&
+            (refR > whiteR + CAL_MIN_SPREAD);
 
   if (ok) {
-    thrL = whiteL + (uint16_t)((blackL - whiteL) * CAL_K);
-    thrR = whiteR + (uint16_t)((blackR - whiteR) * CAL_K);
+    thrL = whiteL + (uint16_t)((refL - whiteL) * CAL_K);
+    thrR = whiteR + (uint16_t)((refR - whiteR) * CAL_K);
   } else {
     long tL = (long)(blackL * WHITE_FACTOR);
     long tR = (long)(blackR * WHITE_FACTOR);
@@ -320,8 +391,10 @@ void calibrateLine() {
 
 #if BT_ENABLED
   Serial.print(F("CAL black=")); Serial.print(blackL); Serial.print('/'); Serial.print(blackR);
-  if (ok) { Serial.print(F(" white=")); Serial.print(whiteL); Serial.print('/'); Serial.print(whiteR); }
-  else    { Serial.print(F(" white=NONE")); }
+  if (haveWhiteCal) { Serial.print(F(" white=")); Serial.print(whiteL); Serial.print('/'); Serial.print(whiteR); }
+  else              { Serial.print(F(" white=NONE")); }
+  if (haveScuffCal) { Serial.print(F(" scuff=")); Serial.print(scuffL); Serial.print('/'); Serial.print(scuffR); }
+  else              { Serial.print(F(" scuff=NONE")); }
   Serial.print(F(" thr="));  Serial.print(thrL); Serial.print('/'); Serial.println(thrR);
 #endif
   lineReset();
@@ -358,7 +431,7 @@ void btReport() {
 
 void btHelp() {
 #if BT_ENABLED
-  Serial.println(F("1/S=straight 2/L=left 3/R=right | G=go X=stop D=debug C=whitecal ?=help"));
+  Serial.println(F("1/S=str 2/L=left 3/R=right | G=go X=stop D=dbg C=whitecal B=scuffcal ?=help"));
   btReport();
 #endif
 }
@@ -375,6 +448,7 @@ void btTask() {
       case 'x': case 'X': btStopReq  = true;  break;
       case 'd': case 'D': dbgStream = !dbgStream; break;
       case 'c': case 'C': btCalReq = true; break;
+      case 'b': case 'B': btScuffReq = true; break;
       case '?': case 'h': case 'H': btHelp(); break;
       default: break;
     }
@@ -575,15 +649,19 @@ void setup() {
 #endif
   prevStarterGo = starterGo();
 
-  whiteCalLoad();                              // EEPROM-оос цагааны лавлагаа
+  calLoad();                                   // EEPROM-оос калибровк
 
 #if BT_ENABLED
   Serial.println(F("MINI SUMO ready (BT only)."));
   if (haveWhiteCal) {
-    Serial.print(F("white cal = ")); Serial.print(whiteL);
-    Serial.print('/'); Serial.println(whiteR);
+    Serial.print(F("white=")); Serial.print(whiteL); Serial.print('/'); Serial.println(whiteR);
   } else {
-    Serial.println(F("NO white cal - put sensors on WHITE line and send 'C'"));
+    Serial.println(F("NO white cal - put sensors on WHITE line, send 'C'"));
+  }
+  if (haveScuffCal) {
+    Serial.print(F("scuff=")); Serial.print(scuffL); Serial.print('/'); Serial.println(scuffR);
+  } else {
+    Serial.println(F("NO scuff cal - send 'B', then sweep the scuffed areas"));
   }
   btHelp();
 #endif
@@ -603,7 +681,8 @@ void loop() {
     bool starterEdge = (go && !prevStarterGo);
     prevStarterGo = go;
 
-    if (btCalReq) { btCalReq = false; calibrateWhite(); return; }
+    if (btCalReq)   { btCalReq = false;   calibrateWhite(); return; }
+    if (btScuffReq) { btScuffReq = false; calibrateScuff(); return; }
 
     if (starterEdge) {
       startedBy = STARTED_BY_STARTER;
