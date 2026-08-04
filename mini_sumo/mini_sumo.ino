@@ -15,6 +15,8 @@
    үед код АЧААЛЛАХГҮЙ — upload хийхийн өмнө RX/TX-ийг салга.
    ============================================================================= */
 
+#include <EEPROM.h>
+
 #define PWMA 3
 #define AIN2 4
 #define AIN1 5
@@ -53,6 +55,8 @@
       G : тулаан ЭХЛҮҮЛЭХ (сонгосон тактикаар)
       X : ЗОГСООХ
       D : QTR утга дамжуулахыг асаах/унтраах (босго тааруулахад)
+      C : ЦАГААН КАЛИБРОВК — мэдрэгчээ ЦАГААН ХҮРЭЭН ДЭЭР тавьчихаад дар.
+          EEPROM-д хадгална, нэг л удаа хийхэд хангалттай.
       ? : төлөв ба командын жагсаалт харах
 */
 
@@ -120,10 +124,27 @@
 // МЭДРЭГЧ
 // =============================================================================
 #define ENEMY_ACTIVE    HIGH
-#define AUTO_CALIBRATE     1
-#define WHITE_FACTOR    0.60
+
+/* ---- БОСГО ТОГТООХ ---------------------------------------------------------
+   Зөвхөн хараас коэффициентээр таамаглах нь ажиллахгүй:
+     хэт хатуу  -> хүрээгээ огт танихгүй
+     хэт зөөлөн -> замын бартаа/зурагдсаныг цагаан гэж үзнэ
+   Бартаа нь хараас цайвар боловч жинхэнэ цагаан хүрээнээс хамаагүй бараан.
+   Тэднийг ялгахын тулд ЦАГААНАА хэмжинэ (BT 'C', EEPROM-д хадгалагдана).
+
+   ЖИШЭЭ: цагаан 200, хар 800, CAL_K 0.30 -> босго 380.
+          Бартаа ~500 уншина -> 500 > 380 тул ҮЛ ТООНО.
+          Жинхэнэ хүрээ ~200 -> ажиллана.                                    */
+#define CAL_K           0.30  // БАРТАА мэдэрвэл ↓ (0.22), хүрээгээ алдвал ↑ (0.45)
+#define CAL_MIN_SPREAD    80  // хар/цагааны зөрүү үүнээс бага бол калибровк хүчингүй
+
+// Цагааны калибровк ХИЙГЭЭГҮЙ үеийн нөөц арга (зөвхөн хараас):
+#define WHITE_FACTOR    0.45  // 0.60 хэт зөөлөн байсан
 #define MIN_BLACK_MARGIN 120
-#define LINE_CONFIRM       5
+
+#define LINE_CONFIRM       9  // дараалсан цагаан уншилт (9 * 700us = 6.3 ms)
+                              // 5 -> 9: богино бартаа шүүгдэнэ. 2 см хүрээ нь
+                              // ~20 мс үргэлжлэх тул 6.3 мс нь хангалттай зай.
 #define LINE_SAMPLE_US   700
 
 #define SERVO_START_ANGLE 90
@@ -141,6 +162,7 @@ bool dbgStream  = false;
 uint32_t lastDbg = 0;
 
 bool prevStarterGo = false;
+bool btCalReq = false;
 
 // Тулааныг хэн эхлүүлсэн бэ. Starter модуль зөвхөн ӨӨРӨӨ эхлүүлсэн тулааныг
 // зогсооно. Ингэснээр модуль "ЗОГС" барьж байсан ч BT 'G' ажиллана — товчгүй
@@ -150,6 +172,8 @@ bool prevStarterGo = false;
 uint8_t startedBy = STARTED_BY_BT;
 
 uint16_t thrL = 450, thrR = 450;
+uint16_t whiteL = 0, whiteR = 0;      // EEPROM-д хадгалсан цагааны лавлагаа
+bool     haveWhiteCal = false;
 uint8_t  hitL = 0, hitR = 0;
 bool     lineL = false, lineR = false;
 uint32_t lastSampleUs = 0;
@@ -226,8 +250,8 @@ void lineReset() { hitL = hitR = 0; lineL = lineR = false; lastSampleUs = micros
 
 static inline bool anyWhite() { return (hitL > 0) || (hitR > 0); }
 
-void calibrateLine() {
-#if AUTO_CALIBRATE
+// Хоёр QTR-ийг олон удаа уншиж дундажлана
+void sampleQtr(uint16_t *outL, uint16_t *outR) {
   uint32_t sumL = 0, sumR = 0;
   const uint16_t N = 200;
   for (uint16_t i = 0; i < N; i++) {
@@ -235,20 +259,70 @@ void calibrateLine() {
     sumR += analogRead(rLine);
     delay(2);
   }
-  uint16_t blackL = sumL / N;
-  uint16_t blackR = sumR / N;
+  *outL = sumL / N;
+  *outR = sumR / N;
+}
 
-  long tL = (long)(blackL * WHITE_FACTOR);
-  long tR = (long)(blackR * WHITE_FACTOR);
-  if (blackL - tL < MIN_BLACK_MARGIN) tL = (long)blackL - MIN_BLACK_MARGIN;
-  if (blackR - tR < MIN_BLACK_MARGIN) tR = (long)blackR - MIN_BLACK_MARGIN;
-  thrL = (tL > 40) ? (uint16_t)tL : 450;
-  thrR = (tR > 40) ? (uint16_t)tR : 450;
+// ---- EEPROM: цагааны лавлагаа ----
+#define EE_MAGIC       0xA5C3
+#define EE_ADDR_MAGIC  0
+#define EE_ADDR_WHITE  2
+
+void whiteCalLoad() {
+  uint16_t magic = 0;
+  EEPROM.get(EE_ADDR_MAGIC, magic);
+  if (magic != EE_MAGIC) return;
+  EEPROM.get(EE_ADDR_WHITE, whiteL);
+  EEPROM.get(EE_ADDR_WHITE + 2, whiteR);
+  haveWhiteCal = true;
+}
+
+void whiteCalSave() {
+  uint16_t magic = EE_MAGIC;
+  EEPROM.put(EE_ADDR_MAGIC, magic);
+  EEPROM.put(EE_ADDR_WHITE, whiteL);
+  EEPROM.put(EE_ADDR_WHITE + 2, whiteR);
+  haveWhiteCal = true;
+}
+
+// BT 'C' — мэдрэгч ЦАГААН ХҮРЭЭН дээр байхад дуудна
+void calibrateWhite() {
+  sampleQtr(&whiteL, &whiteR);
+  whiteCalSave();
+#if BT_ENABLED
+  Serial.print(F("WHITE CAL saved = ")); Serial.print(whiteL);
+  Serial.print('/'); Serial.println(whiteR);
+  Serial.println(F("Now put robot on BLACK and send G."));
+#endif
+  lineReset();
+}
+
+// Тулаан бүрийн эхэнд: хараа хэмжиж, босгыг цагаан ба хар хоёрын хооронд тавина
+void calibrateLine() {
+  uint16_t blackL, blackR;
+  sampleQtr(&blackL, &blackR);
+
+  bool ok = haveWhiteCal &&
+            (blackL > whiteL + CAL_MIN_SPREAD) &&
+            (blackR > whiteR + CAL_MIN_SPREAD);
+
+  if (ok) {
+    thrL = whiteL + (uint16_t)((blackL - whiteL) * CAL_K);
+    thrR = whiteR + (uint16_t)((blackR - whiteR) * CAL_K);
+  } else {
+    long tL = (long)(blackL * WHITE_FACTOR);
+    long tR = (long)(blackR * WHITE_FACTOR);
+    if (blackL - tL < MIN_BLACK_MARGIN) tL = (long)blackL - MIN_BLACK_MARGIN;
+    if (blackR - tR < MIN_BLACK_MARGIN) tR = (long)blackR - MIN_BLACK_MARGIN;
+    thrL = (tL > 40) ? (uint16_t)tL : 450;
+    thrR = (tR > 40) ? (uint16_t)tR : 450;
+  }
 
 #if BT_ENABLED
   Serial.print(F("CAL black=")); Serial.print(blackL); Serial.print('/'); Serial.print(blackR);
-  Serial.print(F(" thr="));      Serial.print(thrL);   Serial.print('/'); Serial.println(thrR);
-#endif
+  if (ok) { Serial.print(F(" white=")); Serial.print(whiteL); Serial.print('/'); Serial.print(whiteR); }
+  else    { Serial.print(F(" white=NONE")); }
+  Serial.print(F(" thr="));  Serial.print(thrL); Serial.print('/'); Serial.println(thrR);
 #endif
   lineReset();
 }
@@ -284,7 +358,7 @@ void btReport() {
 
 void btHelp() {
 #if BT_ENABLED
-  Serial.println(F("1/S=straight 2/L=left 3/R=right | G=go X=stop D=debug ?=help"));
+  Serial.println(F("1/S=straight 2/L=left 3/R=right | G=go X=stop D=debug C=whitecal ?=help"));
   btReport();
 #endif
 }
@@ -300,6 +374,7 @@ void btTask() {
       case 'g': case 'G': btStartReq = true;  break;
       case 'x': case 'X': btStopReq  = true;  break;
       case 'd': case 'D': dbgStream = !dbgStream; break;
+      case 'c': case 'C': btCalReq = true; break;
       case '?': case 'h': case 'H': btHelp(); break;
       default: break;
     }
@@ -500,8 +575,16 @@ void setup() {
 #endif
   prevStarterGo = starterGo();
 
+  whiteCalLoad();                              // EEPROM-оос цагааны лавлагаа
+
 #if BT_ENABLED
   Serial.println(F("MINI SUMO ready (BT only)."));
+  if (haveWhiteCal) {
+    Serial.print(F("white cal = ")); Serial.print(whiteL);
+    Serial.print('/'); Serial.println(whiteR);
+  } else {
+    Serial.println(F("NO white cal - put sensors on WHITE line and send 'C'"));
+  }
   btHelp();
 #endif
 }
@@ -519,6 +602,8 @@ void loop() {
     bool go = starterGo();
     bool starterEdge = (go && !prevStarterGo);
     prevStarterGo = go;
+
+    if (btCalReq) { btCalReq = false; calibrateWhite(); return; }
 
     if (starterEdge) {
       startedBy = STARTED_BY_STARTER;
