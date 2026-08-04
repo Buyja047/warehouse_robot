@@ -14,6 +14,8 @@
    ачаалахын өмнө BT модулийн RX/TX-ийг салга.
    ============================================================================= */
 
+#include <EEPROM.h>
+
 #define PWMA 3
 #define AIN2 4
 #define AIN1 5
@@ -58,6 +60,7 @@
       G         : тулаан эхлүүлэх (starter модулийн оронд)
       X         : яаралтай зогсоох
       D         : QTR утга дамжуулахыг асаах/унтраах (босго тааруулахад)
+      C         : ЦАГААНЫ КАЛИБРОВК (нэг удаа, EEPROM-д хадгална)
       ?         : одоогийн төлөв харах
 */
 
@@ -122,15 +125,32 @@
 // МЭДРЭГЧИЙН ТОХИРГОО
 // =============================================================================
 #define ENEMY_ACTIVE    HIGH
-#define AUTO_CALIBRATE     1
 
-// WHITE_FACTOR: босго = хар_дундаж * энэ утга.
-// 0.30 нь ХЭТ ХАТУУ байсан — хар 800 бол босго 240 болж, QTR цагаан дээр
-// 250-350 уншдаг тул хүрээ огт танигдахгүй. 0.55 нь найдвартай эхлэл.
-// 'D' команд илгээж бодит утгаа хараад тааруул.
-#define WHITE_FACTOR    0.55
+/* ---- ХОЁР ЦЭГИЙН КАЛИБРОВК -------------------------------------------------
+   Зөвхөн хараас коэффициентээр босго таамаглах нь найдваргүй: 0.30 бол огт
+   мэдрэхгүй, 0.55 бол хар дээрх толбыг цагаан гэж үзнэ. Тиймээс ЦАГААНАА
+   хэмжинэ.
+
+   Нэг удаа хийнэ (BT-ээр 'C', эсвэл D12-г 1.5 сек ДАРЖ БАЙХ):
+     1) мэдрэгчээ ЦАГААН хүрээн дээр тавь -> D12 дар  (EEPROM-д хадгална)
+     2) дараа нь хар дээрээ тавиад хэвийн эхлүүл
+
+   Тулаан болгонд хараа дахин хэмжиж, босгыг цагаан ба хар хоёрын хооронд
+   тавина. Ингэснээр батарей/гэрлийн өөрчлөлтөд автоматаар дасна.       */
+#define CAL_K           0.30  // босго = цагаан + (хар - цагаан) * CAL_K
+                              // ХЭТ ИХ мэдэрвэл ↓ (0.22), мэдрэхгүй бол ↑ (0.45)
+                              // Жишээ: цагаан 200, хар 800 -> босго 380.
+                              // Зурагдсан хэсэг ~500 уншина -> 500 > 380 тул
+                              // ҮЛ ТООНО. Жинхэнэ хүрээ ~200 -> ажиллана.
+#define CAL_MIN_SPREAD    80  // хар ба цагааны зөрүү үүнээс бага бол калибровк хүчингүй
+#define CAL_HOLD_MS     1500  // D12-г ийм удаан дарж байвал калибровк руу орно
+
+// Цагааны калибровк ХИЙГЭЭГҮЙ үеийн нөөц арга (зөвхөн хараас):
+#define WHITE_FACTOR    0.45
 #define MIN_BLACK_MARGIN 120
-#define LINE_CONFIRM       5  // дараалсан цагаан уншилт (5 * 700us = 3.5 ms)
+
+#define LINE_CONFIRM       7  // дараалсан цагаан уншилт (7 * 700us = 4.9 ms)
+                              // ХЭТ ИХ мэдэрвэл ↑ (9, 11), хүрээгээ алдвал ↓
 #define LINE_SAMPLE_US   700
 
 // --- Серво -------------------------------------------------------------------
@@ -145,6 +165,7 @@ bool running = false;
 uint8_t strategy = STRAT_DEFAULT;
 bool btStartReq = false;
 bool btStopReq  = false;
+bool btCalReq   = false;
 bool dbgStream  = false;
 uint32_t lastDbg = 0;
 
@@ -157,12 +178,18 @@ bool prevStarterGo = false;
 uint8_t startedBy = STARTED_BY_BUTTON;
 
 uint16_t thrL = 450, thrR = 450;
+uint16_t whiteL = 0, whiteR = 0;      // EEPROM-д хадгалсан цагааны лавлагаа
+bool     haveWhiteCal = false;
 uint8_t  hitL = 0, hitR = 0;
 bool     lineL = false, lineR = false;
 uint32_t lastSampleUs = 0;
 
 bool eL90, eL45, eMid, eR45, eR90, eAny;
 int8_t lastSeen = 1;
+
+// --- Урьдчилсан зарлалт ------------------------------------------------------
+bool buttonDown();
+void btTask();
 
 // ==========================================
 // МОТОР УДИРДЛАГА
@@ -236,8 +263,8 @@ void lineReset() { hitL = hitR = 0; lineL = lineR = false; lastSampleUs = micros
 // Ямар нэг цагаан уншилт байна уу (баталгаажаагүй ч)
 static inline bool anyWhite() { return (hitL > 0) || (hitR > 0); }
 
-void calibrateLine() {
-#if AUTO_CALIBRATE
+// Хоёр QTR-ийг олон удаа уншиж дундажлана
+void sampleQtr(uint16_t *outL, uint16_t *outR) {
   uint32_t sumL = 0, sumR = 0;
   const uint16_t N = 200;
   for (uint16_t i = 0; i < N; i++) {
@@ -245,20 +272,85 @@ void calibrateLine() {
     sumR += analogRead(rLine);
     delay(2);
   }
-  uint16_t blackL = sumL / N;
-  uint16_t blackR = sumR / N;
+  *outL = sumL / N;
+  *outR = sumR / N;
+}
 
+// ---- EEPROM: цагааны лавлагаа ----
+#define EE_MAGIC       0xA5C3
+#define EE_ADDR_MAGIC  0
+#define EE_ADDR_WHITE  2
+
+void whiteCalLoad() {
+  uint16_t magic = 0;
+  EEPROM.get(EE_ADDR_MAGIC, magic);
+  if (magic != EE_MAGIC) return;
+  EEPROM.get(EE_ADDR_WHITE, whiteL);
+  EEPROM.get(EE_ADDR_WHITE + 2, whiteR);
+  haveWhiteCal = true;
+}
+
+void whiteCalSave() {
+  uint16_t magic = EE_MAGIC;
+  EEPROM.put(EE_ADDR_MAGIC, magic);
+  EEPROM.put(EE_ADDR_WHITE, whiteL);
+  EEPROM.put(EE_ADDR_WHITE + 2, whiteR);
+  haveWhiteCal = true;
+}
+
+// Хараас босго таамаглах нөөц арга (цагааны калибровк байхгүй үед)
+static void thresholdFromBlackOnly(uint16_t blackL, uint16_t blackR) {
   long tL = (long)(blackL * WHITE_FACTOR);
   long tR = (long)(blackR * WHITE_FACTOR);
   if (blackL - tL < MIN_BLACK_MARGIN) tL = (long)blackL - MIN_BLACK_MARGIN;
   if (blackR - tR < MIN_BLACK_MARGIN) tR = (long)blackR - MIN_BLACK_MARGIN;
   thrL = (tL > 40) ? (uint16_t)tL : 450;
   thrR = (tR > 40) ? (uint16_t)tR : 450;
+}
+
+// Тулаан болгонд: хараа хэмжиж, босгыг цагаан ба хар хоёрын хооронд тавина
+void calibrateLine() {
+  uint16_t blackL, blackR;
+  sampleQtr(&blackL, &blackR);
+
+  bool ok = haveWhiteCal &&
+            (blackL > whiteL + CAL_MIN_SPREAD) &&
+            (blackR > whiteR + CAL_MIN_SPREAD);
+
+  if (ok) {
+    thrL = whiteL + (uint16_t)((blackL - whiteL) * CAL_K);
+    thrR = whiteR + (uint16_t)((blackR - whiteR) * CAL_K);
+  } else {
+    thresholdFromBlackOnly(blackL, blackR);
+  }
 
 #if BT_ENABLED
   Serial.print(F("CAL black=")); Serial.print(blackL); Serial.print('/'); Serial.print(blackR);
+  if (ok) { Serial.print(F(" white=")); Serial.print(whiteL); Serial.print('/'); Serial.print(whiteR); }
+  else    { Serial.print(F(" white=NONE")); }
   Serial.print(F(" thr="));      Serial.print(thrL);   Serial.print('/'); Serial.println(thrR);
 #endif
+  lineReset();
+}
+
+// Цагааны лавлагааг нэг удаа хэмжиж EEPROM-д хадгална
+void calibrateWhite() {
+#if BT_ENABLED
+  Serial.println(F("CAL WHITE: put sensors ON THE WHITE LINE, then press D12"));
+#endif
+  while (buttonDown()) { }                     // өмнөх дарлагыг тавихыг хүлээнэ
+  delay(50);
+  while (!buttonDown()) { btTask(); }          // цагаан дээр тавьсны дараах дарлага
+  delay(50);
+  while (buttonDown()) { }
+
+  sampleQtr(&whiteL, &whiteR);
+  whiteCalSave();
+
+#if BT_ENABLED
+  Serial.print(F("CAL white saved = ")); Serial.print(whiteL);
+  Serial.print('/'); Serial.println(whiteR);
+  Serial.println(F("Now place robot on BLACK and start normally."));
 #endif
   lineReset();
 }
@@ -303,6 +395,7 @@ void btTask() {
       case 'g': case 'G': btStartReq = true;  break;
       case 'x': case 'X': btStopReq  = true;  break;
       case 'd': case 'D': dbgStream = !dbgStream; break;
+      case 'c': case 'C': btCalReq = true; break;
       case '?':           btReport(); break;
       default: break;
     }
@@ -330,13 +423,22 @@ bool starterGo() {
 
 bool buttonDown() { return digitalRead(START_BUTTON) == LOW; }
 
-bool buttonPressed() {
-  if (!buttonDown()) return false;
+// 0 = дараагүй, 1 = богино дарлага (эхлүүлэх), 2 = удаан дарлага (калибровк)
+uint8_t buttonEvent() {
+  if (!buttonDown()) return 0;
   delay(25);
-  if (!buttonDown()) return false;
-  while (buttonDown()) { }
+  if (!buttonDown()) return 0;
+
+  uint32_t t0 = millis();
+  while (buttonDown()) {
+    if (millis() - t0 >= CAL_HOLD_MS) {
+      while (buttonDown()) { }
+      delay(25);
+      return 2;
+    }
+  }
   delay(25);
-  return true;
+  return 1;
 }
 
 // Тулааны үед зогсоох дохио ирсэн үү
@@ -521,8 +623,16 @@ void setup() {
 #endif
   prevStarterGo = starterGo();
 
+  whiteCalLoad();                              // EEPROM-оос цагааны лавлагаа
+
 #if BT_ENABLED
-  Serial.println(F("MINI SUMO ready. 1/2/3=strat G=go X=stop D=debug"));
+  Serial.println(F("MINI SUMO ready. 1/2/3=strat G=go X=stop D=debug C=calib"));
+  if (haveWhiteCal) {
+    Serial.print(F("white cal = ")); Serial.print(whiteL);
+    Serial.print('/'); Serial.println(whiteR);
+  } else {
+    Serial.println(F("NO white cal - press 'C' or hold D12 1.5s"));
+  }
 #endif
 }
 
@@ -540,10 +650,16 @@ void loop() {
     bool starterEdge = (go && !prevStarterGo);   // модуль дөнгөж "ЯВ" болов
     prevStarterGo = go;
 
+    // Цагааны калибровк: BT 'C' эсвэл D12-г CAL_HOLD_MS дарж байх
+    if (btCalReq) { btCalReq = false; calibrateWhite(); return; }
+
+    uint8_t be = buttonEvent();
+    if (be == 2) { calibrateWhite(); return; }
+
     if (starterEdge) {
       startedBy = STARTED_BY_STARTER;
       startMatch();
-    } else if (btStartReq || buttonPressed()) {
+    } else if (btStartReq || be == 1) {
       btStartReq = false;
       startedBy = STARTED_BY_BUTTON;           // модуль энэ тулааныг зогсоохгүй
       startMatch();
