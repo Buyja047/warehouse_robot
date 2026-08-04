@@ -56,6 +56,7 @@
 #define SPD_SEARCH        90  // алдсан үеийн эргэлт       (~35%)
 #define SPD_BACK         105  // хүрээнээс ухрах           (~41%)
 #define SPD_ESC_TURN     110  // хүрээнээс зайлж эргэх     (~43%)
+#define SPD_ESC_FWD      110  // эргэсний дараа төв рүү чигээрээ явах (~43%)
 
 #define PWM_MIN           55  // үүнээс доош мотор огт эргэхгүй (үхмэл бүс)
                               // Мотор чичрээд эргэхгүй бол ЭНИЙГ өсгө (65, 75...)
@@ -86,6 +87,12 @@
 #define TURN_90_MS       520
 #define TURN_180_MS      900
 #define ESC_SETTLE_MS     40
+#define ESC_FWD_MS       450  // эргэсний дараа төв рүү чигээрээ явах хугацаа
+                              // ХЭТ УРТ БОЛГОХГҮЙ — нөгөө талын хүрээ рүү дүрэлзэнэ
+
+// Төв рүү явж байхад өрсөлдөгч мэдрэгдвэл шууд дайралт руу шилжих үү?
+// 1 = тийм (санал болгоно), 0 = ESC_FWD_MS дуустал сохроор явна
+#define ESC_FWD_ABORT_ON_ENEMY 1
 
 // =============================================================================
 // МЭДРЭГЧИЙН ТОХИРГОО
@@ -317,6 +324,7 @@ bool buttonPressed() {
   return true;
 }
 
+// Зугтах маневрын үе шат: хугацаа дуустал заавал гүйцэтгэнэ
 void driveFor(int left, int right, int pwm, uint16_t ms) {
   uint32_t t0 = millis();
   setMotors(left, right, pwm);
@@ -324,6 +332,22 @@ void driveFor(int left, int right, int pwm, uint16_t ms) {
     motorTick();
     lineTask();
     if (buttonDown()) { coastMotors(); running = false; return; }
+  }
+}
+
+// Төв рүү явах: хүрээ (эсвэл өрсөлдөгч) илэрвэл хугацаанаас нь өмнө тасална
+void driveForward(int pwm, uint16_t ms) {
+  uint32_t t0 = millis();
+  setMotors(1, 1, pwm);
+  while (millis() - t0 < ms) {
+    motorTick();
+    lineTask();
+    if (lineL || lineR) return;                // дахин хүрээ — loop зугтаана
+    if (buttonDown()) { coastMotors(); running = false; return; }
+#if ESC_FWD_ABORT_ON_ENEMY
+    readEnemy();
+    if (eAny) return;                          // өрсөлдөгч олдлоо — дайралт руу
+#endif
   }
 }
 
@@ -349,7 +373,11 @@ void escapeEdge(bool hitLeft, bool hitRight) {
   if (!running) return;
 
   brakeMotors(); tickDelay(ESC_SETTLE_MS);
-  lineReset();
+  lineReset();                                 // хүрээнээс саллаа, тоолуур цэвэрлэнэ
+
+  // Эргэж дууссан -> төв рүү чигээрээ явна.
+  // Дахин хүрээ таарвал эсвэл өрсөлдөгч илэрвэл дундаас нь тасарна.
+  driveForward(SPD_ESC_FWD, ESC_FWD_MS);
 
   firstMove = false;                           // сохор дайралтыг цуцлана
 }
